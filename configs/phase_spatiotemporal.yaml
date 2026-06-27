@@ -1,0 +1,22 @@
+data_root: data/phase
+
+backbone: timm:convnext_tiny
+pretrained: true
+freeze_backbone: false
+
+temporal: tcn
+temporal_ch: 256
+temporal_layers: 8
+
+num_steps: 14
+num_instruments: 18
+instrument_loss_weight: 1.0
+
+clip_len: 64
+stride: 32
+img_size: 224
+
+lr: 1.0e-4
+batch_size: 2
+epochs: 30
+workers: 4

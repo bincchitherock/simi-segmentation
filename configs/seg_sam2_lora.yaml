@@ -1,0 +1,11 @@
+data_root: data/seg
+img_size: 1024
+prompt_kind: point
+
+lora_rank: 8
+lora_alpha: 16
+
+lr: 5.0e-6
+weight_decay: 0.1
+epochs: 40
+batch_size: 2
