@@ -1,3 +1,18 @@
+"""
+The two segmenters, and how they are wrapped so training treats them alike.
+
+`TinyUNetSegmenter` is small, starts from nothing, and is what actually runs here.
+Every number in the README came from it.
+
+`SAM2Segmenter` wraps Meta's SAM 2. It is not installed and has never been run in
+this repo, so treat the code as a sketch, not as something known to work. It says so
+loudly at runtime. If you want to bring it up, install the package, fetch a
+checkpoint, and expect to fix things.
+
+Both are used the same way. Give them an image and a prompt, get back a score per
+pixel saying how likely that pixel is part of the instrument.
+"""
+
 from __future__ import annotations
 
 import math
@@ -26,6 +41,13 @@ SAM2_DECODER_ALSO_TRAIN = ("sam_mask_decoder.output_hypernetworks_mlps",
 
 
 class SegmenterModule(nn.Module):
+    """
+    What both segmenters agree to provide, so the training loop can ignore the difference.
+
+    `backend` is a short name for logs and figures. `adapter_root` is the part that
+    gets saved and reloaded. `forward` takes an image and a prompt and returns a score
+    per pixel.
+    """
 
     backend: str
     lora_spec: LoRASpec
@@ -41,6 +63,13 @@ class SegmenterModule(nn.Module):
 
 
 class SAM2Segmenter(SegmenterModule):
+    """
+    Meta's SAM 2 with small trainable adapters added. Never run here.
+
+    The original weights stay frozen and only the adapters and the output layers
+    train, which is what makes fine-tuning a model this size practical at all.
+    """
+
     def __init__(self, checkpoint: str, model_cfg: str, spec: LoRASpec,
                  train_decoder: bool = True, device: str = "cpu") -> None:
         super().__init__()
@@ -49,8 +78,8 @@ class SAM2Segmenter(SegmenterModule):
         except ImportError as exc:
             raise ImportError(SAM2_INSTALL_HINT) from exc
 
-        print("[SAM2Segmenter] UNVERIFIED PATH: written against facebookresearch/sam2 "
-              "@ main but never executed in this repo (sam2 not installed here).")
+        print("[SAM2Segmenter] UNVERIFIED PATH. I wrote this against facebookresearch/sam2 "
+              "@ main and never ran it, because sam2 is not installed here.")
 
         self.model = build_sam2(model_cfg, checkpoint, device=device,
                                 apply_postprocessing=False)
@@ -109,8 +138,8 @@ class SAM2Segmenter(SegmenterModule):
                 f"coordinates in that space), got {h}x{w}; set img_size: "
                 f"{self.input_size} in the config")
         if point_coords is None and boxes is None:
-            raise ValueError("SAM2Segmenter needs one prompt per image; the mask "
-                             "decoder asserts len(prompts) == len(images)")
+            raise ValueError("SAM2Segmenter needs exactly one prompt for every image. "
+                             "It has no way to guess where to look on its own")
 
         image_embed, high_res_features = self._image_features(images)
         coords, labels = self._sparse_points(point_coords, point_labels, boxes)
@@ -122,7 +151,7 @@ class SAM2Segmenter(SegmenterModule):
             sparse_prompt_embeddings=sparse,
             dense_prompt_embeddings=dense,
             multimask_output=False,
-            repeat_image=False,  # one prompt per image, so no expansion
+            repeat_image=False,  # one prompt per image, so nothing needs duplicating
             high_res_features=high_res_features,
         )
         return F.interpolate(low_res_masks, size=(h, w), mode="bilinear",
@@ -132,10 +161,17 @@ class SAM2Segmenter(SegmenterModule):
 def prompt_channel(shape: torch.Size, point_coords: torch.Tensor | None,
                    point_labels: torch.Tensor | None,
                    boxes: torch.Tensor | None) -> torch.Tensor:
+    """
+    Paint the prompt into an extra image channel, so TinyUNet can see it.
+
+    SAM 2 has a dedicated path for prompts. TinyUNet does not, so I drew the prompt as
+    a picture instead: a soft bright spot where you clicked, or a filled rectangle for
+    a box, stacked onto the image as a fourth channel.
+    """
     b, _, h, w = shape
     if point_coords is not None and point_labels is None:
-        raise ValueError("point_coords needs point_labels: without them there is no "
-                         "way to tell a foreground click from a background one")
+        raise ValueError("point_coords needs point_labels alongside it. Without them "
+                         "I could not tell a click on the instrument from one off it")
     if point_coords is None and boxes is None:
         raise ValueError("no prompt given")
     device = point_coords.device if point_coords is not None else boxes.device
@@ -172,13 +208,21 @@ class _DoubleConv(nn.Module):
 
 
 class TinyUNetSegmenter(SegmenterModule):
+    """
+    A small segmenter, about 30 thousand values, trained from scratch. This is the one
+    that runs here.
+
+    It narrows the image down, thinks, then widens it back out to full size, carrying
+    the early detail across so edges stay sharp. Every score in the README came from
+    this, so read them as TinyUNet numbers and not as SAM 2 numbers.
+    """
 
     def __init__(self, spec: LoRASpec, base: int = 16, init_seed: int = 0,
                  train_decoder: bool = True) -> None:
         super().__init__()
         with torch.random.fork_rng(devices=[]):
             torch.manual_seed(init_seed)
-            self.enc1 = _DoubleConv(4, base)  # 3 image channels + 1 prompt channel
+            self.enc1 = _DoubleConv(4, base)  # 3 colour channels, plus the prompt as a 4th
             self.enc2 = _DoubleConv(base, base * 2)
             self.pool = nn.MaxPool2d(2)
             self.fc1 = nn.Linear(base * 2, base * 2)
@@ -189,8 +233,8 @@ class TinyUNetSegmenter(SegmenterModule):
 
         self.backend = "tinyunet"
         self.lora_spec = spec
-        # `train_decoder` means the same on both backends: fine-tune the decoder
-        # alongside the adapters
+        # `train_decoder` means the same thing on both segmenters: train the output
+        # layers as well as the adapters.
         n_tensors = mark_only_lora_trainable(
             self, also_train=("head", "dec") if train_decoder else ())
         tr, tot = count_trainable(self)
@@ -215,13 +259,21 @@ class TinyUNetSegmenter(SegmenterModule):
         z = e2.flatten(2).transpose(1, 2)
         z = self.proj(F.gelu(self.fc1(z)))
         e2 = z.transpose(1, 2).view(b, c, h, w)
-        # interpolate to e1 rather than doubling, so odd input sizes line up
+        # Resize to match e1 exactly rather than simply doubling, so odd-sized images
+        # still line up.
         up = F.interpolate(e2, size=e1.shape[-2:], mode="bilinear", align_corners=False)
         return self.head(self.dec(torch.cat([up, e1], dim=1)))
 
 
 def dice_bce_loss(logits: torch.Tensor, target: torch.Tensor,
                   smooth: float = 1.0) -> torch.Tensor:
+    """
+    The training loss, two parts added together.
+
+    One part judges each pixel on its own. The other judges the shape as a whole. The
+    first alone does badly when the instrument is small, because calling everything
+    background is then nearly right. The second keeps that honest.
+    """
     if logits.shape != target.shape:
         raise ValueError(f"logits {tuple(logits.shape)} and target "
                          f"{tuple(target.shape)} must have the same shape")
@@ -235,6 +287,7 @@ def dice_bce_loss(logits: torch.Tensor, target: torch.Tensor,
 
 
 def forward_batch(model: SegmenterModule, batch: dict, device: torch.device) -> torch.Tensor:
+    """Move one batch onto the device and run it, whichever prompt kind it carries."""
     prompts = {k: batch[k].to(device) if batch[k] is not None else None
                for k in PROMPT_KEYS}
     return model(batch["image"].to(device), point_coords=prompts["point_coords"],
@@ -242,6 +295,7 @@ def forward_batch(model: SegmenterModule, batch: dict, device: torch.device) -> 
 
 
 def build_segmenter(cfg: SegConfig, device: torch.device) -> SegmenterModule:
+    """Build whichever segmenter the config asks for."""
     spec_kwargs = dict(rank=cfg.lora_rank, alpha=cfg.lora_alpha, dropout=cfg.lora_dropout)
     if cfg.model == "tinyunet":
         return TinyUNetSegmenter(LoRASpec(targets=("",), **spec_kwargs),

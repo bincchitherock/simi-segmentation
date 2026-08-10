@@ -1,3 +1,15 @@
+"""
+Labels a whole clip from one click, using SAM 2's video tracking. Never run here.
+
+Point at the instrument once on the first frame, and SAM 2 follows it through the
+rest of the clip, writing a mask for every frame. The idea is to cut down the hand
+labelling: correct what comes out rather than draw each mask from nothing.
+
+This needs the SAM 2 package, which is not installed, so none of this has ever run.
+It says so when you start it. Treat what it writes as a rough draft to review, never
+as ground truth to train on directly.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -16,6 +28,7 @@ SAM2_JPEG_EXTS = (".jpg", ".jpeg", ".JPG", ".JPEG")
 
 
 def sam2_frame_names(frames_dir: str) -> list[str]:
+    """Frame files in order. SAM 2 insists the names be plain numbers, so I added a check."""
     names = [p for p in os.listdir(frames_dir) if os.path.splitext(p)[-1] in SAM2_JPEG_EXTS]
     if not names:
         raise SystemExit(f"no JPEG frames in {frames_dir}")
@@ -23,9 +36,9 @@ def sam2_frame_names(frames_dir: str) -> list[str]:
         names.sort(key=lambda p: int(os.path.splitext(p)[0]))
     except ValueError as exc:
         raise SystemExit(
-            f"{frames_dir}: SAM2 requires frames named '<frame_index>.jpg' "
-            f"(0.jpg, 00001.jpg, ...) because it sorts by int(stem); found "
-            f"{sorted(names)[:3]}. Rename or symlink them, e.g. "
+            f"{frames_dir}: SAM 2 needs frames named as plain numbers, like 0.jpg or "
+            f"00001.jpg, because it puts them in order by reading the name as a number. "
+            f"I found {sorted(names)[:3]}. Rename or link them, for example with "
             f"ffmpeg -i v.mp4 -q:v 2 -start_number 0 out/'%05d.jpg'.") from exc
     return names
 
@@ -33,22 +46,22 @@ def sam2_frame_names(frames_dir: str) -> list[str]:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--frames-dir", required=True,
-                    help="dir of JPEGs named <frame_index>.jpg (0.jpg, 00001.jpg ...)")
+                    help="folder of JPEGs named as numbers, like 0.jpg or 00001.jpg")
     ap.add_argument("--checkpoint", required=True)
     ap.add_argument("--model-cfg", dest="model_cfg", required=True,
-                    help="sam2-package-relative, e.g. configs/sam2.1/sam2.1_hiera_l.yaml")
-    ap.add_argument("--lora", default=None, help="adapters written by train_sam2.py")
+                    help="path inside the sam2 package, e.g. configs/sam2.1/sam2.1_hiera_l.yaml")
+    ap.add_argument("--lora", default=None, help="adapter file written by train_sam2.py")
     ap.add_argument("--seed-frame", type=int, default=0)
     ap.add_argument("--seed-point", type=float, nargs=2, default=None,
-                    help="x y of a foreground click on the seed frame")
+                    help="x y of a click on the instrument, on the starting frame")
     ap.add_argument("--seed-box", type=float, nargs=4, default=None,
-                    help="x0 y0 x1 y1 box on the seed frame")
+                    help="x0 y0 x1 y1 box around the instrument, on the starting frame")
     ap.add_argument("--obj-id", type=int, default=1)
     ap.add_argument("--out", default="autolabels")
     args = ap.parse_args()
 
     if (args.seed_point is None) == (args.seed_box is None):
-        raise SystemExit("give exactly one of --seed-point x y / --seed-box x0 y0 x1 y1")
+        raise SystemExit("give exactly one of --seed-point x y or --seed-box x0 y0 x1 y1")
 
     try:
         from sam2.build_sam import build_sam2_video_predictor
@@ -57,8 +70,8 @@ def main() -> None:
 
     device = get_device()
     print(device_report(device))
-    print("[autolabel] UNVERIFIED PATH: written against facebookresearch/sam2 @ main "
-          "but never executed in this repo (sam2 not installed here).")
+    print("[autolabel] UNVERIFIED PATH. I wrote this against facebookresearch/sam2 @ main "
+          "and never ran it, because sam2 is not installed here.")
 
     frame_names = sam2_frame_names(args.frames_dir)
     predictor = build_sam2_video_predictor(args.model_cfg, args.checkpoint,
@@ -96,8 +109,8 @@ def main() -> None:
 
     with open(os.path.join(args.out, "encord_import.json"), "w") as f:
         json.dump(manifest, f, indent=2)
-    print(f"wrote {len(manifest)} masks + encord_import.json -> {args.out}/  "
-          f"(review/correct them, then add to the training set)")
+    print(f"wrote {len(manifest)} masks and encord_import.json into {args.out}/. "
+          "Check and fix them by hand before adding any of it to the training set.")
 
 
 if __name__ == "__main__":

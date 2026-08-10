@@ -1,3 +1,16 @@
+"""
+Trains the segmenter.
+
+python -m src.segmentation.train_sam2 --config configs/seg_phantom.yaml
+
+Same shape as the phase trainer. Each epoch runs through the training clips, scores
+val, and saves whenever val improves. Only the adapters and output layers are saved,
+which keeps the file small but means you have to rebuild the same model to load it.
+
+Val chose the saved model, so its score flatters it. For the honest number, run
+`src.segmentation.predict` on the test split afterwards.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -21,7 +34,7 @@ from src.segmentation.sam2_lora import (SegmenterModule, build_segmenter, dice_b
 
 @torch.no_grad()
 def evaluate(model: SegmenterModule, loader: DataLoader, device: torch.device) -> SegScore:
-    """Mean Dice/IoU over `loader`, with the scored population carried along."""
+    """Average Dice and IoU over everything in `loader`, plus how many masks that was."""
     model.eval()
     return merge_scores(dice_iou(forward_batch(model, b, device).cpu(), b["mask"])
                         for b in loader)
@@ -36,18 +49,18 @@ def _loader(ds: MaskDataset, cfg: SegConfig, *, shuffle: bool) -> DataLoader:
 def train_epoch(model: SegmenterModule, loader: DataLoader,
                 opt: torch.optim.Optimizer, cfg: SegConfig, device: torch.device,
                 step: int, max_steps: int) -> tuple[int, list[dict[str, float]]]:
-    """One pass over `loader`, stopping at `max_steps`. Returns (step, loss history)."""
+    """One pass over the training clips, stopping early at `max_steps` if asked."""
     model.train()
     history: list[dict[str, float]] = []
     for batch in loader:
         loss = dice_bce_loss(forward_batch(model, batch, device),
                              batch["mask"].to(device))
         if not math.isfinite(loss.item()):
-            raise RuntimeError(f"step {step}: loss is {loss.item()} -- aborting rather "
-                               "than silently training on NaN")
+            raise RuntimeError(f"step {step}: the loss came out as {loss.item()}. "
+                               "Stopping here, because carrying on would wreck the weights")
         opt.zero_grad()
         loss.backward()
-        if cfg.grad_clip > 0:  # a max_norm of 0.0 would zero every gradient
+        if cfg.grad_clip > 0:  # setting this to 0.0 would wipe out every update
             torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad],
                                            cfg.grad_clip)
         opt.step()
@@ -65,7 +78,7 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--config", required=True)
     ap.add_argument("--out", default="runs/seg")
     ap.add_argument("--steps", type=int, default=None,
-                    help="cap total optimizer steps (smoke tests); epochs still bound the run")
+                    help="stop after this many updates, for quick checks. epochs still apply")
     ap.add_argument("--model", default=None, choices=["sam2", "tinyunet"])
     ap.add_argument("--checkpoint", default=None)
     ap.add_argument("--model-cfg", dest="model_cfg", default=None)
@@ -92,7 +105,7 @@ def main() -> None:
     device = get_device()
     print(device_report(device))
 
-    splits = resolve_seg_splits(cfg)  # raises unless train/val exist and are disjoint
+    splits = resolve_seg_splits(cfg)  # fails here if train and val overlap or are missing
     train_ids, val_ids = splits["train"], splits["val"]
 
     common = dict(data_root=cfg.data_root, img_size=cfg.img_size,
@@ -130,15 +143,15 @@ def main() -> None:
 
         score = evaluate(model, val_loader, device)
         print(f"epoch {epoch:02d} | {model.backend} | {score.describe('val')}")
-        # the scored population travels with the score
+        # Record how many masks each score covered, not just the score.
         history["eval"].append({"epoch": epoch, "step": step, "dice": score.dice,
                                 "iou": score.iou, "n_scored": score.n_scored,
                                 "n_total": score.n_total})
         if score.n_scored != score.n_total:
             raise RuntimeError(
-                f"epoch {epoch}: {score.n_empty_pairs} val masks were excluded as "
-                "empty-vs-empty, so this epoch's Dice is an average over a different "
-                "population than the others' and selecting on it would be meaningless")
+                f"epoch {epoch}: I skipped {score.n_empty_pairs} val masks as empty, so "
+                "this epoch's score covers a different set of masks than the other "
+                "epochs. Comparing them to pick a winner would be meaningless")
         if score.dice > best:
             best, best_epoch = score.dice, epoch
             save(score, epoch)
@@ -149,11 +162,11 @@ def main() -> None:
     with open(history_path, "w") as f:
         json.dump(history, f, indent=2)
 
-    print(f"done. best val Dice {best:.3f} at epoch {best_epoch} on videos "
-          f"{list(val_ids)} using {model.backend} — this is a model-SELECTION score, "
-          f"not a held-out test score. adapters -> {out_path}, curve -> {history_path}\n"
-          f"for the held-out number: python -m src.segmentation.predict "
-          f"--checkpoint {out_path} --split test")
+    print(f"done. best val Dice {best:.3f} at epoch {best_epoch} on clips "
+          f"{list(val_ids)} using {model.backend}. That was the score I chose on, not a "
+          f"held-out one. Saved the adapters to {out_path} and the curve to "
+          f"{history_path}\nFor the held-out number, run: python -m "
+          f"src.segmentation.predict --checkpoint {out_path} --split test")
 
 
 if __name__ == "__main__":
