@@ -137,7 +137,7 @@ def main() -> None:
         json.dump(summary, f, indent=2)
 
     print(f"{model.backend} | {score.describe()} — {SPLIT_PROVENANCE[args.split]}")
-    print(f"same architecture UNTRAINED on the same frames | {base.describe()}")
+    print(f"same architecture untrained on the same frames | {base.describe()}")
     print(f"uniform-random logits on the same frames | {chance.describe()}")
     print(f"wrote {metrics_path}, {fig_path}")
 
