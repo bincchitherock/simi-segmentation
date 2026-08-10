@@ -53,7 +53,7 @@ def test_a_gap_in_the_frame_index_raises():
     add_window(agg, "video_00", [0, 1], 1.0, [0, 0])
     add_window(agg, "video_00", [5, 6], 1.0, [1, 1])
 
-    with pytest.raises(ValueError, match="contiguous"):
+    with pytest.raises(ValueError, match="gaps"):
         agg.videos()
 
 

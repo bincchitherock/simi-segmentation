@@ -45,7 +45,7 @@ def test_nothing_scorable_is_nan_and_says_so():
 
 def test_describe_names_the_population():
     text = dice_iou(PRED, TARGET, from_logits=False).describe("val")
-    assert text.startswith("val ") and "3/4" in text and "1 excluded" in text
+    assert text.startswith("val ") and "3/4" in text and "1 skipped" in text
 
 
 def test_merge_scores_is_sample_weighted():

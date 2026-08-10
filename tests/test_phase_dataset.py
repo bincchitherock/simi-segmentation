@@ -98,7 +98,7 @@ def test_mixing_numbered_and_unnumbered_frame_names_raises(tmp_path):
     names = [f"frame_{i:06d}.jpg" for i in range(11)] + ["intro.jpg"]
     root = write_gradient_video(tmp_path / "phase", names)
 
-    with pytest.raises(ValueError, match="ambiguous"):
+    with pytest.raises(ValueError, match="what order"):
         load_clip(root, clip_len=12)
 
 
