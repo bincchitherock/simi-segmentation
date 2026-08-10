@@ -1,0 +1,10 @@
+CPU: everything works but slowly, and reproducibly. Used by the tests.
+[MaskDataset:test] 24 pairs from 2 videos at 128px, point prompts (0 of 24 dropped: no instrument in view, so no prompt exists)
+[predict] building the model the adapters go into
+[TinyUNetSegmenter] LoRA on 2 linears, 14 trainable tensors | 10.4K / 29.5K params | decoder trained
+[predict] building a second, never-adapted copy for the untrained baseline
+[TinyUNetSegmenter] LoRA on 2 linears, 14 trainable tensors | 10.4K / 29.5K params | decoder trained
+[predict] loaded 14 adapter tensors (0 unmatched in file, 0 trainable tensors left at init)
+tinyunet | [test] ['clip_08', 'clip_09'] | Dice 0.959 +/- 0.010 | IoU 0.922 +/- 0.018 over 24/24 masks, each prompted with a point taken from its ground-truth mask — held out from both training and checkpoint selection
+same model BEFORE training: Dice 0.121 | IoU 0.065 over 24/24 masks
+wrote results/segmentation_test_qualitative.png, results/segmentation_test_metrics.json, results/segmentation_test_untrained_baseline.png

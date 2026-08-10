@@ -1,0 +1,227 @@
+{
+  "n_samples": 24,
+  "n_scored": 24,
+  "n_excluded_empty_pairs": 0,
+  "dice": {
+    "mean": 0.9594267830252647,
+    "std": 0.009792741774822391,
+    "n": 24
+  },
+  "iou": {
+    "mean": 0.922179880241553,
+    "std": 0.017998228194047727,
+    "n": 24
+  },
+  "backend": "tinyunet",
+  "checkpoint": "runs/seg/adapters.pt",
+  "split": "test",
+  "split_video_ids": [
+    "clip_08",
+    "clip_09"
+  ],
+  "split_provenance": "held out from both training and checkpoint selection",
+  "selection_split_video_ids": [
+    "clip_06",
+    "clip_07"
+  ],
+  "seed": 0,
+  "n_training_steps": 1422,
+  "selected_epoch": 78,
+  "config_hash": "sha256:f85ff96ef8704d1f",
+  "config": {
+    "data_root": "data/seg",
+    "model": "tinyunet",
+    "checkpoint": "",
+    "model_cfg": "",
+    "img_size": 128,
+    "prompt_kind": "point",
+    "splits": "splits.json",
+    "train_split": [],
+    "val_split": [],
+    "test_split": [],
+    "lora_rank": 8,
+    "lora_alpha": 16,
+    "lora_dropout": 0.0,
+    "train_decoder": true,
+    "lr": 0.001,
+    "weight_decay": 0.01,
+    "grad_clip": 1.0,
+    "epochs": 80,
+    "batch_size": 4,
+    "workers": 0,
+    "seed": 0
+  },
+  "prompt_kind": "point",
+  "prompt_source": "sampled from the ground-truth mask (oracle prompt)",
+  "figure_pair_ids": [
+    "images/clip_09_000009.png",
+    "images/clip_09_000004.png",
+    "images/clip_09_000001.png",
+    "images/clip_09_000005.png",
+    "images/clip_09_000008.png",
+    "images/clip_08_000007.png",
+    "images/clip_08_000008.png",
+    "images/clip_08_000009.png"
+  ],
+  "untrained_baseline": {
+    "n_samples": 24,
+    "n_scored": 24,
+    "n_excluded_empty_pairs": 0,
+    "dice": {
+      "mean": 0.12121059528241555,
+      "std": 0.0279631626043131,
+      "n": 24
+    },
+    "iou": {
+      "mean": 0.06474327047665913,
+      "std": 0.015986331915006594,
+      "n": 24
+    }
+  },
+  "samples": [
+    {
+      "pair_id": "images/clip_08_000000.png",
+      "dice": 0.9711059331893921,
+      "iou": 0.9438347220420837,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_08_000001.png",
+      "dice": 0.9628167152404785,
+      "iou": 0.9282994866371155,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_08_000002.png",
+      "dice": 0.9610556960105896,
+      "iou": 0.9250310063362122,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_08_000003.png",
+      "dice": 0.9612606763839722,
+      "iou": 0.9254108667373657,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_08_000004.png",
+      "dice": 0.9637005925178528,
+      "iou": 0.9299442172050476,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_08_000005.png",
+      "dice": 0.9686411023139954,
+      "iou": 0.9391891956329346,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_08_000006.png",
+      "dice": 0.974418580532074,
+      "iou": 0.9501133561134338,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_08_000007.png",
+      "dice": 0.9634193181991577,
+      "iou": 0.929420530796051,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_08_000008.png",
+      "dice": 0.9692753553390503,
+      "iou": 0.9403824806213379,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_08_000009.png",
+      "dice": 0.975834310054779,
+      "iou": 0.9528089761734009,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_08_000010.png",
+      "dice": 0.9512017369270325,
+      "iou": 0.9069444537162781,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_08_000011.png",
+      "dice": 0.9625668525695801,
+      "iou": 0.9278350472450256,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_09_000000.png",
+      "dice": 0.9635826945304871,
+      "iou": 0.9297245740890503,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_09_000001.png",
+      "dice": 0.9571497440338135,
+      "iou": 0.9178208708763123,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_09_000002.png",
+      "dice": 0.9573550820350647,
+      "iou": 0.9181985259056091,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_09_000003.png",
+      "dice": 0.9593647718429565,
+      "iou": 0.9219030737876892,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_09_000004.png",
+      "dice": 0.9500229358673096,
+      "iou": 0.9048035144805908,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_09_000005.png",
+      "dice": 0.9608014225959778,
+      "iou": 0.9245599508285522,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_09_000006.png",
+      "dice": 0.9383739233016968,
+      "iou": 0.8839024305343628,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_09_000007.png",
+      "dice": 0.9488977789878845,
+      "iou": 0.9027645587921143,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_09_000008.png",
+      "dice": 0.9621249437332153,
+      "iou": 0.9270142316818237,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_09_000009.png",
+      "dice": 0.9372219443321228,
+      "iou": 0.8818604946136475,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_09_000010.png",
+      "dice": 0.955339789390564,
+      "iou": 0.9144981503486633,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_09_000011.png",
+      "dice": 0.9507108926773071,
+      "iou": 0.9060524106025696,
+      "scored": true
+    }
+  ]
+}

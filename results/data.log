@@ -1,0 +1,9 @@
+phase -> data/phase
+  12 videos, 576 frames total
+  steps: 14/14 distinct, most frequent covers 13% of frames
+  instruments: 1.53 present per frame on average, 19 frames with none
+seg -> data/seg
+  120 image/mask pairs from 10 clips
+  instrument covers 5.4% of the frame on average (max 9.7%); 5 empty masks
+
+This is a procedural phantom, not surgery. It encodes the step in the mucosa tint and the instrument pair, so a model can learn it; any metric measured on it describes the pipeline, not clinical performance.

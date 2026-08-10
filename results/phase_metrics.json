@@ -1,0 +1,139 @@
+{
+  "backend": "timm:resnet18(scratch)+tcn",
+  "checkpoint": "runs/phase/best.pt",
+  "split": "test",
+  "split_provenance": "held out from both training and checkpoint selection",
+  "split_video_ids": {
+    "train": [
+      "video_00",
+      "video_01",
+      "video_02",
+      "video_03",
+      "video_04",
+      "video_05"
+    ],
+    "val": [
+      "video_06",
+      "video_07",
+      "video_08"
+    ],
+    "test": [
+      "video_09",
+      "video_10",
+      "video_11"
+    ]
+  },
+  "split_sizes": {
+    "train": 6,
+    "val": 3,
+    "test": 3
+  },
+  "n_clips_scored": 9,
+  "seed": 0,
+  "selected_epoch": 11,
+  "selected_by": {
+    "metric": "val step macro-F1",
+    "value": 0.24880651561323827
+  },
+  "config": {
+    "data_root": "data/phase",
+    "splits": "splits.json",
+    "train_split": [],
+    "val_split": [],
+    "test_split": [],
+    "backbone": "timm:resnet18",
+    "pretrained": false,
+    "freeze_backbone": false,
+    "temporal": "tcn",
+    "temporal_ch": 128,
+    "temporal_layers": 4,
+    "n_heads": 4,
+    "dropout": 0.1,
+    "num_steps": 14,
+    "num_instruments": 18,
+    "instrument_loss_weight": 1.0,
+    "instrument_threshold": 0.5,
+    "clip_len": 24,
+    "stride": 12,
+    "img_size": 96,
+    "lr": 0.0003,
+    "weight_decay": 0.01,
+    "grad_clip": 1.0,
+    "epochs": 20,
+    "batch_size": 2,
+    "workers": 0,
+    "seed": 0,
+    "class_weighting": true
+  },
+  "score": {
+    "split": "test",
+    "n_videos": 3,
+    "n_frames": 144,
+    "step_acc": 0.3402777777777778,
+    "step_macro_f1": 0.20255483432823332,
+    "step_edit": 17.81045751633987,
+    "step_f1": [
+      25.396825396825395,
+      19.047619047619047,
+      12.698412698412698
+    ],
+    "steps_present": 9,
+    "num_steps": 14,
+    "instr_macro_f1": 0.22129629553481311,
+    "instr_present": 13,
+    "num_instruments": 18
+  },
+  "untrained_baseline": {
+    "split": "test (untrained)",
+    "n_videos": 3,
+    "n_frames": 144,
+    "step_acc": 0.0,
+    "step_macro_f1": 0.0,
+    "step_edit": 0.0,
+    "step_f1": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "steps_present": 9,
+    "num_steps": 14,
+    "instr_macro_f1": 0.07389315128006287,
+    "instr_present": 13,
+    "num_instruments": 18
+  },
+  "uniform_random_baseline": {
+    "split": "test (uniform random)",
+    "n_videos": 3,
+    "n_frames": 144,
+    "step_acc": 0.06944444444444445,
+    "step_macro_f1": 0.05189690801123196,
+    "step_edit": 8.173238961914395,
+    "step_f1": [
+      4.026845637583892,
+      1.342281879194631,
+      0.0
+    ],
+    "steps_present": 9,
+    "num_steps": 14,
+    "instr_macro_f1": 0.12250307872232306,
+    "instr_present": 13,
+    "num_instruments": 18
+  },
+  "per_video": [
+    {
+      "video_id": "video_09",
+      "n_frames": 48,
+      "accuracy": 0.3541666666666667
+    },
+    {
+      "video_id": "video_10",
+      "n_frames": 48,
+      "accuracy": 0.3125
+    },
+    {
+      "video_id": "video_11",
+      "n_frames": 48,
+      "accuracy": 0.3541666666666667
+    }
+  ]
+}

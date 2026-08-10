@@ -1,0 +1,203 @@
+{
+  "n_samples": 20,
+  "n_scored": 20,
+  "n_excluded_empty_pairs": 0,
+  "dice": {
+    "mean": 0.9640102595090866,
+    "std": 0.006818307060626914,
+    "n": 20
+  },
+  "iou": {
+    "mean": 0.93060023188591,
+    "std": 0.012667316269064722,
+    "n": 20
+  },
+  "backend": "tinyunet",
+  "checkpoint": "runs/seg/adapters.pt",
+  "split": "val",
+  "split_video_ids": [
+    "clip_06",
+    "clip_07"
+  ],
+  "split_provenance": "the split the checkpoint was selected on, not a held-out estimate",
+  "selection_split_video_ids": [
+    "clip_06",
+    "clip_07"
+  ],
+  "seed": 0,
+  "n_training_steps": 1422,
+  "selected_epoch": 78,
+  "config_hash": "sha256:f85ff96ef8704d1f",
+  "config": {
+    "data_root": "data/seg",
+    "model": "tinyunet",
+    "checkpoint": "",
+    "model_cfg": "",
+    "img_size": 128,
+    "prompt_kind": "point",
+    "splits": "splits.json",
+    "train_split": [],
+    "val_split": [],
+    "test_split": [],
+    "lora_rank": 8,
+    "lora_alpha": 16,
+    "lora_dropout": 0.0,
+    "train_decoder": true,
+    "lr": 0.001,
+    "weight_decay": 0.01,
+    "grad_clip": 1.0,
+    "epochs": 80,
+    "batch_size": 4,
+    "workers": 0,
+    "seed": 0
+  },
+  "prompt_kind": "point",
+  "prompt_source": "sampled from the ground-truth mask (oracle prompt)",
+  "figure_pair_ids": [
+    "images/clip_07_000010.png",
+    "images/clip_07_000009.png",
+    "images/clip_07_000007.png",
+    "images/clip_06_000007.png",
+    "images/clip_07_000011.png",
+    "images/clip_06_000010.png",
+    "images/clip_06_000011.png",
+    "images/clip_07_000005.png"
+  ],
+  "untrained_baseline": {
+    "n_samples": 20,
+    "n_scored": 20,
+    "n_excluded_empty_pairs": 0,
+    "dice": {
+      "mean": 0.07916033612564206,
+      "std": 0.02322087377503343,
+      "n": 20
+    },
+    "iou": {
+      "mean": 0.041353984735906124,
+      "std": 0.012423379442894126,
+      "n": 20
+    }
+  },
+  "samples": [
+    {
+      "pair_id": "images/clip_06_000000.png",
+      "dice": 0.9520426392555237,
+      "iou": 0.9084745645523071,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_06_000005.png",
+      "dice": 0.9523809552192688,
+      "iou": 0.9090909361839294,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_06_000006.png",
+      "dice": 0.9598239064216614,
+      "iou": 0.9227513074874878,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_06_000007.png",
+      "dice": 0.9635584354400635,
+      "iou": 0.9296793937683105,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_06_000008.png",
+      "dice": 0.9729443192481995,
+      "iou": 0.9473140239715576,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_06_000009.png",
+      "dice": 0.9642666578292847,
+      "iou": 0.9309989809989929,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_06_000010.png",
+      "dice": 0.9673405885696411,
+      "iou": 0.9367470145225525,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_06_000011.png",
+      "dice": 0.9706498980522156,
+      "iou": 0.9429734945297241,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_07_000000.png",
+      "dice": 0.9703173041343689,
+      "iou": 0.942345917224884,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_07_000001.png",
+      "dice": 0.9624812602996826,
+      "iou": 0.9276759624481201,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_07_000002.png",
+      "dice": 0.96277916431427,
+      "iou": 0.9282296895980835,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_07_000003.png",
+      "dice": 0.9651995897293091,
+      "iou": 0.9327398538589478,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_07_000004.png",
+      "dice": 0.9669787883758545,
+      "iou": 0.9360687136650085,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_07_000005.png",
+      "dice": 0.974333643913269,
+      "iou": 0.9499518871307373,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_07_000006.png",
+      "dice": 0.9722099900245667,
+      "iou": 0.9459227323532104,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_07_000007.png",
+      "dice": 0.9606127142906189,
+      "iou": 0.9242105484008789,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_07_000008.png",
+      "dice": 0.9671772718429565,
+      "iou": 0.9364407062530518,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_07_000009.png",
+      "dice": 0.9591234922409058,
+      "iou": 0.9214574694633484,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_07_000010.png",
+      "dice": 0.9506953358650208,
+      "iou": 0.9060240983963013,
+      "scored": true
+    },
+    {
+      "pair_id": "images/clip_07_000011.png",
+      "dice": 0.9652892351150513,
+      "iou": 0.9329073429107666,
+      "scored": true
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+CPU: everything works but slowly, and reproducibly. Used by the tests.
+timm:resnet18(scratch)+tcn | [test] 144 frames / 3 videos | step acc 0.340 macro-F1 0.203 (9/14 steps present) | edit 17.8 F1@10 25.4 F1@25 19.0 F1@50 12.7 | instr macro-F1 0.221 (13/18 instruments present) — held out from both training and checkpoint selection
+same architecture UNTRAINED on the same frames | [test (untrained)] 144 frames / 3 videos | step acc 0.000 macro-F1 0.000 (9/14 steps present) | edit 0.0 F1@10 0.0 F1@25 0.0 F1@50 0.0 | instr macro-F1 0.074 (13/18 instruments present)
+uniform-random logits on the same frames | [test (uniform random)] 144 frames / 3 videos | step acc 0.069 macro-F1 0.052 (9/14 steps present) | edit 8.2 F1@10 4.0 F1@25 1.3 F1@50 0.0 | instr macro-F1 0.123 (13/18 instruments present)
+wrote results/phase_metrics.json, results/phase_timeline.png
