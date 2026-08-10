@@ -29,7 +29,7 @@ def test_no_split_configured_raises():
 
 
 def test_overlapping_splits_raise():
-    with pytest.raises(SplitError, match="overlap"):
+    with pytest.raises(SplitError, match="both contain"):
         resolve_splits(available=["a", "b"], explicit={"train": ["a", "b"], "val": ["b"]})
 
 
@@ -39,7 +39,7 @@ def test_empty_split_raises():
 
 
 def test_split_naming_an_unknown_video_raises():
-    with pytest.raises(SplitError, match="unknown"):
+    with pytest.raises(SplitError, match="could not find"):
         resolve_splits(available=["a"], explicit={"train": ["a"], "val": ["ghost"]})
 
 
