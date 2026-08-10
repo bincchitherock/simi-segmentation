@@ -1,5 +1,8 @@
 """
-Per-frame image encoder for the phase model. `timm:<name>` backbones only.
+Turns one video frame into a list of numbers the phase model can work with.
+
+The phase model never looks at raw pixels. I wrapped an off-the-shelf image network
+from the `timm` library so that it hands back one vector per frame.
 """
 
 from __future__ import annotations
@@ -10,9 +13,12 @@ import torch.nn as nn
 
 class FrameEncoder(nn.Module):
     """
-    Wraps a timm classifier as a pooled feature extractor.
-    - Accepts (B, C, H, W) or (B, T, C, H, W); the latter returns (B, T, feat_dim).
-    - `feat_dim` is a positive int known at construction.
+    One vector per frame, taken from a `timm` image network with its classifier removed.
+
+    Give it a batch of images shaped (batch, colour, height, width) and you get back
+    (batch, feat_dim). Give it a batch of clips shaped (batch, time, colour, height,
+    width) and you get back (batch, time, feat_dim). `feat_dim` is fixed once the
+    encoder is built, so the temporal model knows how wide to be.
     """
 
     def __init__(self, backbone: str = "timm:convnext_tiny", pretrained: bool = True,
@@ -20,9 +26,9 @@ class FrameEncoder(nn.Module):
         super().__init__()
         if not backbone.startswith("timm:"):
             raise ValueError(
-                f"unknown backbone spec {backbone!r}; expected 'timm:<model_name>'. "
-                "The 'sam2' branch was removed (dead code, and SAM2's image encoder "
-                "returns a dict of feature maps, not a pooled vector).")
+                f"unknown backbone {backbone!r}. Expected 'timm:<model_name>'. "
+                "I removed the 'sam2' option, because SAM 2 hands back a stack of "
+                "feature maps rather than the single vector this needs.")
 
         import timm
 
@@ -31,8 +37,8 @@ class FrameEncoder(nn.Module):
                                      num_classes=0, global_pool="avg")
         feat_dim = int(getattr(self.net, "num_features", 0))
         if feat_dim <= 0:
-            raise RuntimeError(f"{backbone!r} did not report a usable num_features "
-                               f"({feat_dim!r}); cannot size the temporal stack")
+            raise RuntimeError(f"{backbone!r} did not report how wide its output is "
+                               f"(got {feat_dim!r}), so I could not size the model after it")
         self.feat_dim: int = feat_dim
 
         self.frozen = bool(freeze)
@@ -42,7 +48,7 @@ class FrameEncoder(nn.Module):
             self.net.eval()
 
     def train(self, mode: bool = True) -> "FrameEncoder":
-        """A frozen backbone stays in eval mode even when the parent calls train()."""
+        """A frozen encoder stays in eval mode even when the model around it trains."""
         super().train(mode)
         if self.frozen:
             self.net.eval()

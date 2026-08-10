@@ -1,3 +1,11 @@
+"""
+Reads a YAML file into a settings object, and complains clearly when it cannot.
+
+Every run is described by one file in `configs/`. I set it up to check everything up
+front rather than let a typo surface as a crash forty minutes into training, so an
+unknown key, a missing key or a wrong type all fail straight away, naming the offender.
+"""
+
 from __future__ import annotations
 
 import dataclasses
@@ -16,15 +24,20 @@ _MISSING = dataclasses.MISSING
 
 
 class ConfigError(ValueError):
-    """Raised for any malformed config: unknown key, missing key, wrong type, bad value."""
+    """Raised for a bad config: unknown key, missing key, wrong type, or bad value."""
 
 
 # Schemas
 @dataclass(frozen=True)
 class PhaseConfig:
     """
-    Spatio-temporal phase + instrument recognition.
-    - Splits are video-level
+    Everything a phase recognition run needs. This is what `configs/phase_*.yaml` fills in.
+
+    Edit these values, not the ones in `PhaseModelConfig`. That class covers only the
+    fields the network itself needs, and `PhaseModelConfig.from_config` copies them
+    across from here when the model is built.
+
+    Splits are whole videos. Frames from one video never land in two different splits.
     """
 
     data_root: str
@@ -79,7 +92,10 @@ class PhaseConfig:
 @dataclass(frozen=True)
 class SegConfig:
     """
-    SAM2+LoRA / TinyUNet instrument segmentation.
+    Everything a segmentation run needs. This is what `configs/seg_*.yaml` fills in.
+
+    `model: tinyunet` is the one that runs here and needs no downloads. `model: sam2`
+    needs the SAM 2 package and a checkpoint file, neither of which is installed.
     """
 
     data_root: str
@@ -121,6 +137,7 @@ class SegConfig:
 
 def load_config(path: str | Path, schema: type[C],
                 overrides: Mapping[str, Any] | None = None) -> C:
+    """Read a YAML file into `schema`. Anything in `overrides` wins over the file."""
     p = Path(path)
     try:
         raw = yaml.safe_load(p.read_text())
@@ -139,6 +156,7 @@ def load_config(path: str | Path, schema: type[C],
 
 def config_from_mapping(data: Mapping[str, Any], schema: type[C],
                         source: str = "<mapping>") -> C:
+    """Build a settings object from a plain dict, checking every key and type."""
     known = {f.name: f for f in fields(schema)}  # type: ignore[arg-type]
     hints = typing.get_type_hints(schema)
 
@@ -164,7 +182,7 @@ def config_from_mapping(data: Mapping[str, Any], schema: type[C],
 
 
 def config_to_dict(cfg: Any) -> dict[str, Any]:
-    """Plain dict for checkpoints/JSON. Round-trips through `config_from_mapping`."""
+    """Back to a plain dict, ready to save. `config_from_mapping` reads it back in."""
     return {k: list(v) if isinstance(v, tuple) else v
             for k, v in dataclasses.asdict(cfg).items()}
 

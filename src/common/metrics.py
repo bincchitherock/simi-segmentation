@@ -1,5 +1,10 @@
 """
-Segmentation metrics shared by the phase and segmentation packages.
+Scoring a predicted mask against the true one. Both models use this.
+
+Dice and IoU both measure how much two masks overlap, on a scale of 0 to 1. Dice is
+the more forgiving of the two. I skipped any pair where both masks were empty, because
+there is nothing there to agree or disagree about, and kept a count of what went, so a
+score can never quietly average over a different set of frames.
 """
 
 from __future__ import annotations
@@ -13,7 +18,7 @@ import torch
 
 @dataclass(frozen=True)
 class SegScore:
-    """Mean Dice/IoU + the population they were computed over."""
+    """The average scores, and how many masks went into them."""
 
     dice: float
     iou: float
@@ -25,18 +30,19 @@ class SegScore:
         return self.n_scored + self.n_empty_pairs
 
     def describe(self, label: str = "") -> str:
-        """One line giving the scores and the population they were computed over."""
+        """One line with the scores and how many masks they cover."""
         prefix = f"{label} " if label else ""
         if self.n_scored == 0:
-            return (f"{prefix}Dice n/a | IoU n/a — 0 of {self.n_total} masks scored "
-                    f"({self.n_empty_pairs} had empty prediction and empty target)")
+            return (f"{prefix}Dice n/a | IoU n/a, 0 of {self.n_total} masks scored "
+                    f"({self.n_empty_pairs} had nothing in either mask)")
         return (f"{prefix}Dice {self.dice:.3f} | IoU {self.iou:.3f} "
                 f"over {self.n_scored}/{self.n_total} masks "
-                f"({self.n_empty_pairs} excluded: prediction and target both empty)")
+                f"({self.n_empty_pairs} skipped, nothing in either mask)")
 
 
 def dice_iou(pred: torch.Tensor, target: torch.Tensor, *, from_logits: bool = True,
              threshold: float = 0.5) -> SegScore:
+    """Score a batch of predicted masks against the true ones."""
     if pred.shape != target.shape:
         raise ValueError(f"pred {tuple(pred.shape)} and target {tuple(target.shape)} "
                          "must have the same shape")
@@ -65,6 +71,7 @@ def dice_iou(pred: torch.Tensor, target: torch.Tensor, *, from_logits: bool = Tr
 
 
 def merge_scores(scores: Iterable[SegScore]) -> SegScore:
+    """Combine scores from several batches, weighted by how many masks each covers."""
     scores = list(scores)
     n_scored = sum(s.n_scored for s in scores)
     n_empty = sum(s.n_empty_pairs for s in scores)

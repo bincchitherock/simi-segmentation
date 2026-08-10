@@ -1,5 +1,9 @@
 """
-LoRA adapters and a self-describing adapter-checkpoint format.
+LoRA adapters, plus a save format that records how they were built.
+
+Fine-tuning every weight of a big model is slow and needs a lot of memory. Instead
+I froze the original weights and bolted a small trainable detour onto some of the
+linear layers. Only the detour is trained and saved.
 """
 
 from __future__ import annotations
@@ -23,8 +27,11 @@ DEFAULT_TARGET_PATTERNS: tuple[str, ...] = (
 
 
 class LoRAError(RuntimeError):
+    """Raised when adapters cannot be built, saved, or loaded."""
+
 
 class LoRALinear(nn.Module):
+    """A frozen Linear layer with a small trainable detour added to its output."""
 
     def __init__(self, base: nn.Linear, rank: int = 8, alpha: int = 16,
                  dropout: float = 0.0) -> None:
@@ -102,7 +109,7 @@ def apply_lora(root: nn.Module, spec: LoRASpec) -> int:
                             "apply_lora must not be called twice on the same module")
 
         wrapped = 0
-        # snapshot: setattr during iteration would revisit the new wrappers
+        # I listed the children first. Replacing one mid-loop would revisit the new wrapper.
         for parent_name, parent in list(sub.named_modules()):
             for child_name, child in list(parent.named_children()):
                 full = f"{parent_name}.{child_name}" if parent_name else child_name
@@ -150,7 +157,7 @@ def mark_only_lora_trainable(root: nn.Module, also_train: Sequence[str] = ()) ->
 
 
 def count_trainable(module: nn.Module) -> tuple[int, int]:
-    """(trainable numel, total numel)."""
+    """Count how many parameter values are trainable, and how many there are in total."""
     trainable = sum(p.numel() for p in module.parameters() if p.requires_grad)
     total = sum(p.numel() for p in module.parameters())
     return trainable, total
@@ -158,9 +165,7 @@ def count_trainable(module: nn.Module) -> tuple[int, int]:
 
 def adapter_state_dict(root: nn.Module, spec: LoRASpec,
                        root_name: str = "") -> dict[str, Any]:
-    """
-    Serialise every trainable parameter of `root`, keyed relative to `root`.
-    """
+    """Save every trainable parameter, named relative to `root`."""
     tensors = {n: p.detach().cpu().clone()
                for n, p in root.named_parameters() if p.requires_grad}
     if not tensors:
@@ -172,9 +177,7 @@ def adapter_state_dict(root: nn.Module, spec: LoRASpec,
 
 def load_adapter_state_dict(root: nn.Module, payload: Mapping[str, Any],
                             strict: bool = True) -> LoRALoadReport:
-    """
-    Copy an `adapter_state_dict` payload into `root`
-    """
+    """Copy a saved payload back into `root`."""
     if payload.get("format") != ADAPTER_FORMAT:
         raise LoRAError(f"not a {ADAPTER_FORMAT} adapter payload "
                         f"(format={payload.get('format')!r})")
@@ -198,8 +201,8 @@ def load_adapter_state_dict(root: nn.Module, payload: Mapping[str, Any],
             src, dst = tensors[key], dest[key]
             if src.shape != dst.shape:
                 raise LoRAError(f"shape mismatch for {key}: checkpoint "
-                                f"{tuple(src.shape)} vs module {tuple(dst.shape)} — "
-                                "the injected LoRA rank probably differs from spec")
+                                f"{tuple(src.shape)} vs module {tuple(dst.shape)}. "
+                                "The rank you added probably differs from the saved one.")
             dst.copy_(src.to(dst.device, dst.dtype))
 
     missing = tuple(sorted(k for k in tensors if k not in dest))
@@ -212,13 +215,13 @@ def load_adapter_state_dict(root: nn.Module, payload: Mapping[str, Any],
 
 
 def load_adapter_file(root: nn.Module, path: str, strict: bool = True) -> LoRALoadReport:
-    """torch.load an adapter checkpoint and apply it."""
+    """Read an adapter file from disk and apply it."""
     payload = torch.load(path, map_location="cpu", weights_only=False)
     return load_adapter_state_dict(root, payload, strict=strict)
 
 
 def read_adapter_spec(path: str) -> LoRASpec:
-    """Read just the spec, so adapters can be injected before loading them."""
+    """Read only the settings, so the adapters can be added before their weights load."""
     payload = torch.load(path, map_location="cpu", weights_only=False)
     if payload.get("format") != ADAPTER_FORMAT:
         raise LoRAError(f"{path}: not a {ADAPTER_FORMAT} adapter payload")

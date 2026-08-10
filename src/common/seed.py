@@ -1,3 +1,12 @@
+"""
+Makes a run repeatable.
+
+Training uses random numbers in a lot of places: how weights start out, what order
+the data arrives in, which pixel gets picked as a click. Fixing the seed pins all of
+them, so re-running gives the same answer and a change in the score comes from the
+change you made rather than from luck.
+"""
+
 from __future__ import annotations
 
 import hashlib
@@ -11,6 +20,7 @@ MAX_SEED = 2 ** 32
 
 
 def seed_everything(seed: int, *, deterministic: bool = False) -> int:
+    """Seed Python, numpy and torch at once. Call this first, before anything else."""
     if not 0 <= seed < MAX_SEED:
         raise ValueError(f"seed must be in [0, {MAX_SEED}), got {seed}")
     random.seed(seed)
@@ -27,12 +37,12 @@ def seed_everything(seed: int, *, deterministic: bool = False) -> int:
 
 
 def make_generator(seed: int) -> torch.Generator:
-    """A CPU generator for DataLoader shuffling and dataset-owned randomness."""
+    """A random number source for shuffling, and for choices a dataset makes itself."""
     return torch.Generator().manual_seed(int(seed) % MAX_SEED)
 
 
 def seed_worker(worker_id: int) -> None:
-    """DataLoader `worker_init_fn`"""
+    """Seed a data-loading worker process. Each one gets its own, so they do not repeat."""
     del worker_id
     s = torch.initial_seed() % MAX_SEED
     random.seed(s)
@@ -40,6 +50,7 @@ def seed_worker(worker_id: int) -> None:
 
 
 def derive_seed(*parts: int | str) -> int:
+    """Build one stable seed out of several labels, such as a run seed and an item index."""
     h = hashlib.blake2b("|".join(str(p) for p in parts).encode(), digest_size=8)
     return int.from_bytes(h.digest(), "big") % MAX_SEED
 
