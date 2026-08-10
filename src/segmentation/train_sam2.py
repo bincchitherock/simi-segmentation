@@ -1,107 +1,160 @@
 from __future__ import annotations
 
 import argparse
+import json
+import math
 import os
+from typing import Any
 
 import torch
-import yaml
 from torch.utils.data import DataLoader
 
-from src.common.device import get_device, device_report
-from src.common.lora import lora_state_dict
-from src.segmentation.sam2_lora import build_segmenter, dice_bce_loss
-from src.segmentation.dataset import MaskDataset, SyntheticMaskDataset
-from src.phase.eval import dice_iou
+from src.common.config import SegConfig, config_to_dict, load_config
+from src.common.device import device_report, get_device
+from src.common.lora import adapter_state_dict
+from src.common.metrics import SegScore, dice_iou, merge_scores
+from src.common.seed import make_generator, seed_everything, seed_worker
+from src.segmentation.dataset import MaskDataset, collate, resolve_seg_splits
+from src.segmentation.sam2_lora import (SegmenterModule, build_segmenter, dice_bce_loss,
+                                        forward_batch)
 
-def collate(batch):
 
-    images = torch.stack([b["image"] for b in batch])
-    masks = torch.stack([b["mask"] for b in batch])
-    return {"image": images, "mask": masks,
-            "point_coords": [b["point_coords"] for b in batch],
-            "point_labels": [b["point_labels"] for b in batch],
-            "box": [b["box"] for b in batch]}
+@torch.no_grad()
+def evaluate(model: SegmenterModule, loader: DataLoader, device: torch.device) -> SegScore:
+    """Mean Dice/IoU over `loader`, with the scored population carried along."""
+    model.eval()
+    return merge_scores(dice_iou(forward_batch(model, b, device).cpu(), b["mask"])
+                        for b in loader)
 
-def forward_batch(model, batch, device):
 
-    logits = []
-    for i in range(batch["image"].shape[0]):
-        img = batch["image"][i:i + 1].to(device)
-        pc = batch["point_coords"][i]
-        pl = batch["point_labels"][i]
-        box = batch["box"][i]
-        out = model(img,
-                    point_coords=pc.to(device) if pc is not None else None,
-                    point_labels=pl.to(device) if pl is not None else None,
-                    boxes=box.to(device) if box is not None else None)
-        logits.append(out)
-    return torch.cat(logits, 0)
+def _loader(ds: MaskDataset, cfg: SegConfig, *, shuffle: bool) -> DataLoader:
+    return DataLoader(ds, batch_size=cfg.batch_size, shuffle=shuffle,
+                      num_workers=cfg.workers, collate_fn=collate,
+                      generator=make_generator(cfg.seed), worker_init_fn=seed_worker)
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--config", default=None)
-    ap.add_argument("--synthetic", action="store_true")
+
+def train_epoch(model: SegmenterModule, loader: DataLoader,
+                opt: torch.optim.Optimizer, cfg: SegConfig, device: torch.device,
+                step: int, max_steps: int) -> tuple[int, list[dict[str, float]]]:
+    """One pass over `loader`, stopping at `max_steps`. Returns (step, loss history)."""
+    model.train()
+    history: list[dict[str, float]] = []
+    for batch in loader:
+        loss = dice_bce_loss(forward_batch(model, batch, device),
+                             batch["mask"].to(device))
+        if not math.isfinite(loss.item()):
+            raise RuntimeError(f"step {step}: loss is {loss.item()} -- aborting rather "
+                               "than silently training on NaN")
+        opt.zero_grad()
+        loss.backward()
+        if cfg.grad_clip > 0:  # a max_norm of 0.0 would zero every gradient
+            torch.nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad],
+                                           cfg.grad_clip)
+        opt.step()
+        step += 1
+        history.append({"step": step, "loss": loss.item()})
+        if step % max(1, max_steps // 10) == 0 or step == 1:
+            print(f"step {step:04d}/{max_steps} | loss {loss.item():.4f}")
+        if step >= max_steps:
+            break
+    return step, history
+
+
+def parse_args() -> argparse.Namespace:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--config", required=True)
+    ap.add_argument("--out", default="runs/seg")
+    ap.add_argument("--steps", type=int, default=None,
+                    help="cap total optimizer steps (smoke tests); epochs still bound the run")
+    ap.add_argument("--model", default=None, choices=["sam2", "tinyunet"])
     ap.add_argument("--checkpoint", default=None)
     ap.add_argument("--model-cfg", dest="model_cfg", default=None)
-    ap.add_argument("--lora-rank", type=int, default=8)
-    ap.add_argument("--steps", type=int, default=None)
-    ap.add_argument("--out", default="runs/seg")
-    args = ap.parse_args()
+    ap.add_argument("--img-size", dest="img_size", type=int, default=None)
+    ap.add_argument("--prompt-kind", dest="prompt_kind", default=None,
+                    choices=["point", "box"])
+    ap.add_argument("--lora-rank", dest="lora_rank", type=int, default=None)
+    ap.add_argument("--lora-alpha", dest="lora_alpha", type=int, default=None)
+    ap.add_argument("--lr", type=float, default=None)
+    ap.add_argument("--epochs", type=int, default=None)
+    ap.add_argument("--batch-size", dest="batch_size", type=int, default=None)
+    ap.add_argument("--workers", type=int, default=None)
+    ap.add_argument("--seed", type=int, default=None)
+    return ap.parse_args()
 
-    cfg = {"lr": 5e-6, "weight_decay": 0.1, "epochs": 40, "batch_size": 2,
-           "img_size": 1024, "prompt_kind": "point", "lora_rank": 8}
-    if args.config:
-        with open(args.config) as f:
-            cfg.update(yaml.safe_load(f))
-    args.lora_rank = cfg.get("lora_rank", args.lora_rank)
 
+def main() -> None:
+    args = parse_args()
+    overrides = {k: v for k, v in vars(args).items()
+                 if k not in ("config", "out", "steps")}
+    cfg = load_config(args.config, SegConfig, overrides=overrides)
+
+    seed_everything(cfg.seed)
     device = get_device()
     print(device_report(device))
 
-    if args.synthetic:
-        train = SyntheticMaskDataset(n=8, img_size=128, seed=0)
-        val = SyntheticMaskDataset(n=4, img_size=128, seed=1)
-        cfg["lr"] = 1e-3
-    else:
-        train = MaskDataset(cfg["data_root"], img_size=cfg["img_size"],
-                            prompt_kind=cfg["prompt_kind"])
-        val = train
+    splits = resolve_seg_splits(cfg)  # raises unless train/val exist and are disjoint
+    train_ids, val_ids = splits["train"], splits["val"]
 
-    model = build_segmenter(args, device)
-    opt = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad],
-                            lr=cfg["lr"], weight_decay=cfg["weight_decay"])
+    common = dict(data_root=cfg.data_root, img_size=cfg.img_size,
+                  prompt_kind=cfg.prompt_kind, seed=cfg.seed)
+    train_ds = MaskDataset(split=train_ids, name="train", **common)
+    val_ds = MaskDataset(split=val_ids, name="val", **common)
+    train_loader = _loader(train_ds, cfg, shuffle=True)
+    val_loader = _loader(val_ds, cfg, shuffle=False)
 
-    bs = cfg["batch_size"]
-    tl = DataLoader(train, batch_size=bs, shuffle=True, collate_fn=collate)
-    vl = DataLoader(val, batch_size=bs, shuffle=False, collate_fn=collate)
+    model = build_segmenter(cfg, device)
+    params = [p for p in model.parameters() if p.requires_grad]
+    opt = torch.optim.AdamW(params, lr=cfg.lr, weight_decay=cfg.weight_decay)
 
     os.makedirs(args.out, exist_ok=True)
-    max_steps = args.steps if args.steps is not None else cfg["epochs"] * len(tl)
+    out_path = os.path.join(args.out, "adapters.pt")
+    history_path = os.path.join(args.out, "history.json")
+    history: dict[str, Any] = {"backend": model.backend, "val_split": list(val_ids),
+                     "loss": [], "eval": []}
+
+    max_steps = args.steps if args.steps is not None else cfg.epochs * len(train_loader)
     step = 0
-    model.train()
-    while step < max_steps:
-        for batch in tl:
-            logits = forward_batch(model, batch, device)
-            loss = dice_bce_loss(logits, batch["mask"].to(device))
-            opt.zero_grad(); loss.backward(); opt.step()
-            step += 1
-            if step % max(1, max_steps // 10) == 0 or step == 1:
-                print(f"step {step:04d}/{max_steps} | loss {loss.item():.4f}")
-            if step >= max_steps:
-                break
+    best = -1.0
+    best_epoch = -1
 
-    model.eval()
-    dices, ious = [], []
-    with torch.no_grad():
-        for batch in vl:
-            logits = forward_batch(model, batch, device)
-            d, j = dice_iou(logits.cpu(), batch["mask"])
-            dices.append(d); ious.append(j)
-    print(f"val Dice {sum(dices)/len(dices):.3f} | IoU {sum(ious)/len(ious):.3f}")
+    def save(score: SegScore, epoch: int) -> None:
+        torch.save({**adapter_state_dict(model.adapter_root, model.lora_spec,
+                                         root_name=model.backend),
+                    "cfg": config_to_dict(cfg), "backend": model.backend,
+                    "val_dice": score.dice, "val_split": list(val_ids),
+                    "epoch": epoch, "train_steps": step}, out_path)
 
-    torch.save({"lora": lora_state_dict(model), "cfg": cfg},
-               os.path.join(args.out, "lora_adapters.pt"))
-    print(f"saved adapters -> {args.out}/lora_adapters.pt")
+    for epoch in range(cfg.epochs):
+        step, losses = train_epoch(model, train_loader, opt, cfg, device, step, max_steps)
+        history["loss"] += losses
+
+        score = evaluate(model, val_loader, device)
+        print(f"epoch {epoch:02d} | {model.backend} | {score.describe('val')}")
+        # the scored population travels with the score
+        history["eval"].append({"epoch": epoch, "step": step, "dice": score.dice,
+                                "iou": score.iou, "n_scored": score.n_scored,
+                                "n_total": score.n_total})
+        if score.n_scored != score.n_total:
+            raise RuntimeError(
+                f"epoch {epoch}: {score.n_empty_pairs} val masks were excluded as "
+                "empty-vs-empty, so this epoch's Dice is an average over a different "
+                "population than the others' and selecting on it would be meaningless")
+        if score.dice > best:
+            best, best_epoch = score.dice, epoch
+            save(score, epoch)
+        if step >= max_steps:
+            break
+
+    history["selected_epoch"] = best_epoch
+    with open(history_path, "w") as f:
+        json.dump(history, f, indent=2)
+
+    print(f"done. best val Dice {best:.3f} at epoch {best_epoch} on videos "
+          f"{list(val_ids)} using {model.backend} — this is a model-SELECTION score, "
+          f"not a held-out test score. adapters -> {out_path}, curve -> {history_path}\n"
+          f"for the held-out number: python -m src.segmentation.predict "
+          f"--checkpoint {out_path} --split test")
+
 
 if __name__ == "__main__":
     main()
