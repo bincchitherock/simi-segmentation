@@ -55,8 +55,8 @@ def test_box_prompt_is_the_tight_bounding_box_of_the_mask():
 
 @pytest.mark.parametrize("kind", ["point", "box"])
 def test_an_empty_mask_cannot_be_prompted(kind):
-    """An empty mask has no prompt; any stand-in prompt would encode the label."""
-    with pytest.raises(ValueError, match="empty mask"):
+    """An empty mask has nothing to point at, and a stand-in prompt would leak the answer."""
+    with pytest.raises(ValueError, match="mask is empty"):
         prompt_from_mask(torch.zeros(16, 16), kind, make_generator(0))
 
 
