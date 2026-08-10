@@ -1,4 +1,9 @@
+# Reference configuration for spatio-temporal phase + instrument recognition.
+
 data_root: data/phase
+
+# Splits are video-level. 
+splits: splits.json
 
 backbone: timm:convnext_tiny
 pretrained: true
@@ -6,17 +11,23 @@ freeze_backbone: false
 
 temporal: tcn
 temporal_ch: 256
-temporal_layers: 8
+temporal_layers: 6
+n_heads: 4 # transformer only; inert while temporal is tcn
+dropout: 0.1
 
 num_steps: 14
 num_instruments: 18
 instrument_loss_weight: 1.0
+instrument_threshold: 0.5
 
 clip_len: 64
 stride: 32
 img_size: 224
 
 lr: 1.0e-4
-batch_size: 2
+weight_decay: 1.0e-2
+grad_clip: 1.0
 epochs: 30
+batch_size: 2
 workers: 4
+seed: 0

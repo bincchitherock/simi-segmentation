@@ -1,0 +1,29 @@
+data_root: data/phase
+splits: splits.json # 6 train / 3 val / 3 test videos, by video id
+
+backbone: timm:resnet18
+pretrained: false
+freeze_backbone: false
+
+temporal: tcn
+temporal_ch: 128
+temporal_layers: 4
+n_heads: 4
+dropout: 0.1
+
+num_steps: 14
+num_instruments: 18
+instrument_loss_weight: 1.0
+instrument_threshold: 0.5
+
+clip_len: 24
+stride: 12
+img_size: 96
+
+lr: 3.0e-4
+weight_decay: 1.0e-2
+grad_clip: 1.0
+epochs: 20
+batch_size: 2
+workers: 0
+seed: 0

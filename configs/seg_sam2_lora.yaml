@@ -1,11 +1,27 @@
+# LoRA fine-tuning of SAM 2 for instrument segmentation.
+# pip install "git+https://github.com/facebookresearch/sam2.git"
+# download a checkpoint from the SAM 2 release page into checkpoints/
+# Keys are validated against src.common.config.SegConfig.
+
 data_root: data/seg
+
+model: sam2
+checkpoint: checkpoints/sam2.1_hiera_large.pt
+model_cfg: configs/sam2.1/sam2.1_hiera_l.yaml
 img_size: 1024
 prompt_kind: point
 
+splits: splits.json
+
 lora_rank: 8
 lora_alpha: 16
+lora_dropout: 0.0
+train_decoder: true
 
 lr: 5.0e-6
 weight_decay: 0.1
+grad_clip: 1.0
 epochs: 40
 batch_size: 2
+workers: 4
+seed: 0

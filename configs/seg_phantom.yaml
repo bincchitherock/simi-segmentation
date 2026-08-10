@@ -1,0 +1,25 @@
+# Instrument segmentation on the endoscopic phantom with TinyUNet
+# Keys are validated against src.common.config.SegConfig.
+
+data_root: data/seg
+
+model: tinyunet
+
+img_size: 128
+prompt_kind: point
+
+splits: splits.json
+
+# LoRA wraps the two linears inside TinyUNet, so the adapter save/reload path is real.
+lora_rank: 8
+lora_alpha: 16
+lora_dropout: 0.0
+train_decoder: true
+
+lr: 1.0e-3 # from-scratch UNet; the 5.0e-6 default is a SAM 2 LoRA rate
+weight_decay: 1.0e-2
+grad_clip: 1.0
+epochs: 20
+batch_size: 4
+workers: 0
+seed: 0
