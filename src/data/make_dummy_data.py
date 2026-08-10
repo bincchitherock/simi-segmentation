@@ -1,3 +1,15 @@
+"""
+Writes the practice dataset to disk. Run this once, before anything else.
+
+    python -m src.data.make_dummy_data --out data
+
+It fills `data/phase/` with clips for the phase model and `data/seg/` with image and
+mask pairs for the segmentation model, then writes the split files that say which
+videos belong to train, val and test.
+
+The frames come from `src.data.phantom` and are drawn, not filmed.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -26,14 +38,14 @@ def _rule(sizes: dict[str, int], why: str) -> str:
 
 
 def make_phase(root: Path, *, n_videos: int, n_frames: int, size: int, seed: int) -> None:
-    """Render `n_videos` coherent clips with piecewise-constant step labels."""
+    """Write the phase dataset: whole clips, each labelled with a step per frame."""
     root.mkdir(parents=True, exist_ok=True)
     records, all_frames = [], []
     for v in range(n_videos):
         vid = f"video_{v:02d}"
         vdir = root / vid
         if vdir.exists():
-            shutil.rmtree(vdir)  # a shorter run must not leave frames behind
+            shutil.rmtree(vdir)  # clear it out, or a shorter run leaves old frames behind
         vdir.mkdir(parents=True)
 
         frames = render_video(np.random.default_rng([seed, 1, v]), n_frames, size)
@@ -56,13 +68,13 @@ def make_phase(root: Path, *, n_videos: int, n_frames: int, size: int, seed: int
     sizes = _split_sizes(n_videos, val_frac=0.25)
     write_splits(root / "splits.json",
                  assign_splits([r["video_id"] for r in records], sizes), unit="video_id",
-                 rule=_rule(sizes, "Contiguous and deterministic, so it can be checked by hand. "
-                                   "Split by video: overlapping clips share frames."))
+                 rule=_rule(sizes, "In order and repeatable, so you can check it by hand. "
+                                   "Split by video, because clips that overlap share frames."))
     _report_phase(root, records, all_frames)
 
 
 def make_seg(root: Path, *, n_clips: int, n_frames: int, size: int, seed: int) -> None:
-    """Render `n_clips` short clips as image/mask pairs"""
+    """Write the segmentation dataset: single frames, each paired with its mask."""
     for sub in ("images", "masks"):
         if (root / sub).exists():
             shutil.rmtree(root / sub)
@@ -84,9 +96,10 @@ def make_seg(root: Path, *, n_clips: int, n_frames: int, size: int, seed: int) -
     sizes = _split_sizes(n_clips, val_frac=0.2)
     write_splits(root / "splits.json",
                  assign_splits(sorted({p["video_id"] for p in pairs}), sizes), unit="video_id",
-                 rule=_rule(sizes, "Split by clip, not by frame: frames inside a clip are "
-                                   "near-duplicates and a per-frame split would leak. val "
-                                   "selects the checkpoint, test is scored once."))
+                 rule=_rule(sizes, "Split by clip, not by frame. Frames within a clip look "
+                                   "nearly identical, so splitting by frame would let the "
+                                   "model see test data while training. val picks which "
+                                   "model to keep, test is scored once."))
     _report_seg(root, pairs, all_frames)
 
 
@@ -105,8 +118,8 @@ def _report_seg(root: Path, pairs: list[dict[str, Any]], frames: list[Frame]) ->
     area = np.array([(f.mask > 0).mean() for f in frames])
     print(f"seg -> {root}")
     print(f"  {len(pairs)} image/mask pairs from {len({p['video_id'] for p in pairs})} clips")
-    print(f"  instrument covers {area.mean():.1%} of the frame on average "
-          f"(max {area.max():.1%}); {int((area == 0).sum())} empty masks")
+    print(f"  instrument covers {area.mean():.1%} of the frame on average, "
+          f"at most {area.max():.1%}, with {int((area == 0).sum())} empty masks")
 
 
 def main() -> None:
@@ -126,9 +139,9 @@ def main() -> None:
                size=args.phase_size, seed=args.seed)
     make_seg(out / "seg", n_clips=args.seg_clips, n_frames=args.seg_frames,
              size=args.seg_size, seed=args.seed)
-    print("\nThis is a procedural phantom, not surgery. It encodes the step in the mucosa "
-          "tint and the instrument pair, so a model can learn it; any metric measured on it "
-          "describes the pipeline, not clinical performance.")
+    print("\nThese frames are drawn, not filmed. The step shows up in the tissue colour and "
+          "in which pair of instruments is visible, so a model has something real to learn. "
+          "Any score measured here describes the code, not how it would do on a patient.")
 
 
 if __name__ == "__main__":

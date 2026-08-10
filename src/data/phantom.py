@@ -1,5 +1,19 @@
 """
-Procedural endoscopic phantom 
+A fake endoscope view, drawn from scratch.
+
+I had no surgical footage I could share, so I drew stand-in frames instead: a round
+window, pink tissue with vessels running over it, some glare, and one or two metal
+instruments reaching in from the edge. Every frame comes with its own perfect mask
+and labels, which real footage never does.
+
+I did two things to keep it a fair test rather than a giveaway. I cut the mask from
+the same shapes used to draw the instruments, so it is not painted into the pixels for
+a model to find. And I made sure brightness alone does not separate metal from tissue,
+so the best score any single brightness cutoff reaches is about 0.28 out of 1. A model
+has to learn shape and shading to beat that.
+
+None of this is surgery. Any number measured on it says something about the code,
+not about a patient.
 """
 
 from __future__ import annotations
@@ -13,24 +27,31 @@ from PIL import Image, ImageFilter
 N_STEPS = 14
 N_INSTRUMENT_KINDS = 18
 
-#: Instrument kinds each step may show; a distinct pair per step.
+# Which instruments each step is allowed to show. Every step gets its own pair, so
+# the tools in view are a real clue about the step, the way they are in surgery.
 STEP_INSTRUMENTS: tuple[tuple[int, ...], ...] = tuple(
     (s % N_INSTRUMENT_KINDS, (s + 5) % N_INSTRUMENT_KINDS) for s in range(N_STEPS)
 )
 
+# Tissue shifts from pink toward deep red as the operation goes on, giving the step
+# a second, weaker clue. Each video is nudged off the exact colour so a model cannot
+# just read the step off one pixel.
 _MUCOSA_BRIGHT = np.array([0.94, 0.64, 0.56], dtype=np.float32)
 _MUCOSA_DEEP = np.array([0.62, 0.15, 0.19], dtype=np.float32)
-_TINT_JITTER = 0.35  # in step units, per video
+_TINT_JITTER = 0.35
 
 
 @dataclass(frozen=True)
 class Frame:
-    image: np.ndarray  # (S, S, 3) uint8
-    mask: np.ndarray  # (S, S) uint8, 0 or 255
-    step: int  # surgical step id in [0, N_STEPS)
-    instruments: tuple[int, ...] 
+    """One rendered frame with everything known about it."""
+
+    image: np.ndarray  # (size, size, 3), values 0 to 255
+    mask: np.ndarray  # (size, size), 0 where tissue, 255 where instrument
+    step: int  # which surgical step, from 0 up to N_STEPS
+    instruments: tuple[int, ...]  # which kinds are actually visible
 
     def presence(self, num_kinds: int = N_INSTRUMENT_KINDS) -> list[int]:
+        """One slot per instrument kind, 1 if it is in view. This is the label."""
         vec = [0] * num_kinds
         for k in self.instruments:
             vec[k] = 1
@@ -39,7 +60,10 @@ class Frame:
 
 def render_labelled_frame(rng: np.random.Generator, size: int = 128) -> Frame:
     """
-    One independent phantom frame with its step and instrument labels.
+    One standalone frame, unrelated to any other.
+
+    I added a few retries, because an instrument can be aimed so that it misses the
+    round window entirely and leaves an empty mask.
     """
     step = int(rng.integers(0, N_STEPS))
     optics = _sample_optics(rng)
@@ -56,6 +80,14 @@ def render_labelled_frame(rng: np.random.Generator, size: int = 128) -> Frame:
 
 def render_video(rng: np.random.Generator, n_frames: int = 40,
                  size: int = 96) -> list[Frame]:
+    """
+    A run of frames that hang together as one clip.
+
+    Unlike `render_labelled_frame`, the window shape, the vessels and the tissue colour
+    stay fixed across the clip, and the instruments drift a little from frame to frame.
+    The clip moves through a few steps in ascending order, each lasting a while, which
+    is what gives the phase model something to learn from time rather than from one image.
+    """
     if n_frames < _MIN_SEGMENT:
         raise ValueError(f"n_frames must be >= {_MIN_SEGMENT}, got {n_frames}")
     optics = _sample_optics(rng)
@@ -72,6 +104,13 @@ def render_video(rng: np.random.Generator, n_frames: int = 40,
 
 
 def best_threshold_dice(gray: np.ndarray, mask: np.ndarray) -> float:
+    """
+    How well plain brightness alone finds the instrument. The bar a model has to clear.
+
+    I tried many brightness cutoffs, in both directions, and kept the best score any of
+    them managed. Across the phantom that came out around 0.28 out of 1, so a model
+    scoring well above that has learned something beyond "metal is bright".
+    """
     target = mask.astype(bool)
     if not target.any():
         return 0.0
@@ -85,7 +124,7 @@ def best_threshold_dice(gray: np.ndarray, mask: np.ndarray) -> float:
     return float(best)
 
 
-# Scene sampling
+# Choosing what is in the scene, before anything is drawn.
 _MIN_SEGMENT = 5
 _MAX_SEGMENTS = 8
 
@@ -106,13 +145,17 @@ class _Pose:
 
 @dataclass(frozen=True)
 class _Track:
-    """An instrument's motion over one step segment, in normalised [-1,1] coords."""
+    """
+    How one instrument moves across a step, described once and evaluated per frame.
+
+    Coordinates run from -1 to 1 across the frame, so the same track works at any size.
+    """
 
     kind: int
-    border: float  # entry position along the image perimeter, in [0,1)
-    border_drift: float
-    aim: tuple[float, float]  # point the shaft is pushed toward
-    reach: float
+    border: float  # where it enters, as a fraction around the frame edge
+    border_drift: float  # how fast that entry point slides, per frame
+    aim: tuple[float, float]  # the point the shaft is pushed toward
+    reach: float  # how far in it reaches
     reach_drift: float
     wobble: float
     wobble_freq: float
@@ -162,7 +205,7 @@ def _sample_segments(rng: np.random.Generator, n_frames: int) -> list[tuple[int,
 
 def _sample_tracks(rng: np.random.Generator, step: int, n_frames: int) -> list[_Track]:
     kinds = list(STEP_INSTRUMENTS[step])
-    if rng.random() < 0.35:  # one tool in view rather than two
+    if rng.random() < 0.35:  # sometimes only one tool is in view, not both
         kinds = [kinds[int(rng.integers(0, len(kinds)))]]
     tracks = []
     for kind in kinds:
@@ -223,14 +266,20 @@ def _scene(rng: np.random.Generator, step: int, tint: float, optics: _Optics,
     )
 
 
-# Rendering
+# Turning a chosen scene into actual pixels.
 def _render(scene: _Scene, size: int) -> Frame:
+    """
+    Draw one frame, and cut its mask from the same shapes.
+
+    Everything is drawn by maths over a grid of coordinates rather than with a drawing
+    library, which is what lets the mask come from the instrument shapes themselves.
+    """
     if size < 32:
-        raise ValueError(f"size must be >= 32 for the geometry to survive, got {size}")
+        raise ValueError(f"size must be at least 32 for the shapes to survive, got {size}")
     lin = ((np.arange(size, dtype=np.float32) + 0.5) / size) * 2.0 - 1.0
-    u = lin[None, :]  # x, broadcast over rows
-    v = lin[:, None]  # y, broadcast over columns
-    px = 2.0 / size  # one pixel in normalised units
+    u = lin[None, :]  # x of every pixel, as one row repeated down the frame
+    v = lin[:, None]  # y of every pixel, as one column repeated across
+    px = 2.0 / size  # how wide one pixel is in these coordinates
     rng = np.random.default_rng(scene.texture_seed)
 
     r = np.hypot(u - scene.optics.centre[0], v - scene.optics.centre[1])
@@ -283,7 +332,7 @@ def _lowfreq(rng: np.random.Generator, size: int, cells: int) -> np.ndarray:
 
 def _instrument(u: np.ndarray, v: np.ndarray, pose: _Pose,
                 px: float) -> tuple[np.ndarray, np.ndarray]:
-    """Anti-aliased (alpha, colour) pair for one instrument."""
+    """One instrument, as how solid it is at each pixel plus what colour it is there."""
     (x0, y0), (x1, y1) = pose.entry, pose.tip
     dx, dy = x1 - x0, y1 - y0
     length = math.hypot(dx, dy)
