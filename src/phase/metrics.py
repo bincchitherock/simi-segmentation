@@ -1,5 +1,16 @@
 """
-Frame-wise and segmental metrics for surgical workflow recognition.
+Scoring the phase model. Two different questions, because one is not enough.
+
+Per frame: how many frames got the right step, and does the model handle rare steps
+as well as common ones. Accuracy alone hides this, since always guessing the most
+common step already scores well. Macro-F1 averages the steps evenly instead, so a
+step that appears rarely counts as much as one that fills half the video.
+
+Per stretch: does the predicted timeline have the right shape. A model can label most
+frames correctly while flickering between steps every few frames, which would be
+useless for anything downstream. The edit score compares the two sequences of steps
+ignoring how long each lasted, and the overlap scores ask how many predicted stretches
+line up well enough with a real one to count as found.
 """
 
 from __future__ import annotations
@@ -29,7 +40,7 @@ def _flat_multiclass(pred: torch.Tensor | np.ndarray, target: torch.Tensor | np.
 
 def frame_accuracy(pred: torch.Tensor | np.ndarray, target: torch.Tensor | np.ndarray,
                    ignore_index: int = IGNORE_INDEX, from_logits: bool = True) -> float:
-    """Fraction of scored frames whose predicted step equals the labelled step."""
+    """The share of frames where the predicted step matches the real one."""
     p, t = _flat_multiclass(pred, target, ignore_index, from_logits)
     return float((p == t).mean()) if p.size else float("nan")
 
@@ -37,6 +48,7 @@ def frame_accuracy(pred: torch.Tensor | np.ndarray, target: torch.Tensor | np.nd
 def macro_f1_multiclass(pred: torch.Tensor | np.ndarray, target: torch.Tensor | np.ndarray,
                         num_classes: int, ignore_index: int = IGNORE_INDEX,
                         from_logits: bool = True) -> float:
+    """Score each step on its own, then average. Rare steps count as much as common ones."""
     p, t = _flat_multiclass(pred, target, ignore_index, from_logits)
     f1s = [_f1(*_counts(p == c, t == c)) for c in range(num_classes)]
     return float(np.mean(f1s)) if f1s else float("nan")
@@ -44,7 +56,7 @@ def macro_f1_multiclass(pred: torch.Tensor | np.ndarray, target: torch.Tensor | 
 
 def macro_f1_multilabel(pred: torch.Tensor | np.ndarray, target: torch.Tensor | np.ndarray,
                         threshold: float = 0.5, from_logits: bool = True) -> float:
-    """Macro-F1 over the columns of an (..., C) multi-label prediction."""
+    """Same idea, for instruments. Several can be in view at once, so each is judged alone."""
     p = _as_numpy(pred).reshape(-1, _as_numpy(pred).shape[-1])
     t = _as_numpy(target).reshape(-1, _as_numpy(target).shape[-1])
     if p.shape != t.shape:
@@ -70,8 +82,14 @@ def _sigmoid(x: np.ndarray) -> np.ndarray:
     return 1.0 / (1.0 + np.exp(-x))
 
 
-# Segmental
+# Scoring the shape of the timeline rather than individual frames.
 def rle(labels: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Collapse a run of per-frame labels into stretches.
+
+    Given [2, 2, 2, 5, 5], this returns the labels [2, 5], the starts [0, 3] and the
+    ends [3, 5]. Everything below works on stretches rather than frames.
+    """
     if labels.size == 0:
         empty = np.empty(0, dtype=int)
         return empty, empty, empty
@@ -83,7 +101,13 @@ def rle(labels: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 
 def segmental_edit_score(pred: torch.Tensor | np.ndarray,
                          target: torch.Tensor | np.ndarray) -> float:
-    """(1 - normalised Levenshtein distance) x 100 over the two segment sequences."""
+    """
+    How close the predicted order of steps is to the real one, from 0 to 100.
+
+    I compared only the sequence of steps, not how long each lasted. Counting how many
+    stretches have to be inserted, deleted or changed to turn one list into the other
+    tells me whether the model got the order right even if the timing drifted.
+    """
     p, _, _ = rle(_as_numpy(pred).reshape(-1))
     y, _, _ = rle(_as_numpy(target).reshape(-1))
     longest = max(len(p), len(y))
@@ -106,6 +130,13 @@ def _levenshtein(p: np.ndarray, y: np.ndarray) -> int:
 
 def segment_counts(pred: torch.Tensor | np.ndarray, target: torch.Tensor | np.ndarray,
                    overlap: float) -> tuple[int, int, int]:
+    """
+    Match predicted stretches to real ones, and count hits, false alarms and misses.
+
+    A predicted stretch counts as a hit if it has the right step and overlaps a real
+    stretch by at least `overlap`. Each real stretch can only be claimed once, so
+    predicting the same thing five times gives one hit and four false alarms.
+    """
     p_lab, p_start, p_end = rle(_as_numpy(pred).reshape(-1))
     y_lab, y_start, y_end = rle(_as_numpy(target).reshape(-1))
     hits = np.zeros(len(y_lab), dtype=bool)
@@ -128,25 +159,36 @@ def segment_counts(pred: torch.Tensor | np.ndarray, target: torch.Tensor | np.nd
 
 def segmental_f1_at_k(pred: torch.Tensor | np.ndarray, target: torch.Tensor | np.ndarray,
                       overlap: float) -> float:
-    """Segment-level F1 at IoU threshold `overlap`, x 100, for one sequence.
+    """
+    Turn those counts into one score from 0 to 100, for a single video.
 
-    Multi-video scoring pools tp/fp/fn first (`score_videos`), which is not the
-    mean of per-video F1s.
+    Careful when scoring several videos: `score_videos` adds up the counts across all
+    of them first, which is not the same as averaging each video's score.
     """
     return 100.0 * _f1(*segment_counts(pred, target, overlap))
 
 @dataclass(frozen=True)
 class VideoPrediction:
-    """One video's per-frame predictions, each frame present exactly once."""
+    """One whole video's predictions, with every frame appearing exactly once."""
 
     video_id: str
-    step_logits: np.ndarray   # (N, num_steps)
-    step_target: np.ndarray   # (N,)
-    instr_logits: np.ndarray  # (N, num_instruments)
-    instr_target: np.ndarray  # (N, num_instruments)
+    step_logits: np.ndarray   # (frames, steps), the model's score for each step
+    step_target: np.ndarray   # (frames,), the true step
+    instr_logits: np.ndarray  # (frames, instruments), the score for each instrument
+    instr_target: np.ndarray  # (frames, instruments), 1 where really in view
 
 
 class LogitAggregator:
+    """
+    Stitches clip predictions back into whole videos.
+
+    The model sees a video in overlapping chunks, so some frames get predicted more
+    than once. This collects the pieces and averages the repeats, which leaves one
+    prediction per frame and lets a video be scored as a single timeline.
+
+    Infrastructure. Read past it on a first pass, and come back only if you change
+    how clips are cut up.
+    """
 
     def __init__(self) -> None:
         self._parts: dict[str, list[tuple[np.ndarray, ...]]] = defaultdict(list)
@@ -154,14 +196,14 @@ class LogitAggregator:
     def add(self, video_id: str, frame_index: torch.Tensor, step_logits: torch.Tensor,
             step_target: torch.Tensor, instr_logits: torch.Tensor,
             instr_target: torch.Tensor) -> None:
-        """Add the valid frames of one clip; every tensor is (T, ...) for that clip."""
+        """Hand over the real frames of one clip. Padding must be dropped before this."""
         self._parts[video_id].append((
             _typed(frame_index, np.int64), _typed(step_logits, np.float32),
             _typed(step_target, np.int64), _typed(instr_logits, np.float32),
             _typed(instr_target, np.float32)))
 
     def videos(self) -> list[VideoPrediction]:
-        """One VideoPrediction per video, frames in order, duplicates averaged."""
+        """One entry per video, frames back in order, repeated frames averaged."""
         return [self._merge(vid, parts) for vid, parts in sorted(self._parts.items())]
 
     @staticmethod
@@ -169,9 +211,9 @@ class LogitAggregator:
         frames = np.concatenate([p[0] for p in parts])
         uniq, inv = np.unique(frames, return_inverse=True)
         if not np.array_equal(uniq, np.arange(uniq[0], uniq[0] + uniq.size)):
-            raise ValueError(f"{video_id}: evaluated frames are not contiguous "
-                             f"({uniq.size} frames spanning {uniq[0]}..{uniq[-1]}); "
-                             "the clip index does not cover the whole video")
+            raise ValueError(f"{video_id}: the scored frames have gaps in them. "
+                             f"I got {uniq.size} frames covering {uniq[0]} to {uniq[-1]}, "
+                             "so the clips do not reach across the whole video")
         counts = np.bincount(inv, minlength=uniq.size).astype(np.float32)
         return VideoPrediction(
             video_id=video_id,
@@ -198,14 +240,16 @@ def _one_per_group(values: np.ndarray, inv: np.ndarray, n_groups: int,
     out = np.empty((n_groups,) + values.shape[1:], dtype=values.dtype)
     out[inv] = values
     if not np.array_equal(out[inv], values):
-        raise ValueError(f"{video_id}: overlapping windows disagree about the "
-                         f"{what} label of a frame -- frames and labels are misaligned")
+        raise ValueError(f"{video_id}: two overlapping clips disagree about the {what} "
+                         "label of the same frame, so frames and labels are out of step")
     return out
 
 
-# Reported score
+# The numbers that end up in results/ and in the README.
 @dataclass(frozen=True)
 class PhaseScore:
+    """Every score for one split, plus enough context to know what they cover."""
+
     split: str
     n_videos: int
     n_frames: int
@@ -220,6 +264,7 @@ class PhaseScore:
     num_instruments: int
 
     def describe(self) -> str:
+        """One line holding every score, for the training log."""
         at = " ".join(f"F1@{int(k * 100)} {v:.1f}"
                       for k, v in zip(SEG_OVERLAPS, self.step_f1))
         return (f"[{self.split}] {self.n_frames} frames / {self.n_videos} videos | "
@@ -233,6 +278,7 @@ class PhaseScore:
 def score_videos(videos: Sequence[VideoPrediction], *, num_steps: int,
                  num_instruments: int, instrument_threshold: float,
                  split: str) -> PhaseScore:
+    """Score a whole split. This is the entry point, and the rest of the file feeds it."""
     if not videos:
         raise ValueError(f"{split}: nothing to score")
 

@@ -1,5 +1,14 @@
 """
-Score a trained phase model on one split and draw its step timeline.
+Scores a trained phase model on one split and draws its timeline.
+
+    python -m src.phase.predict --checkpoint runs/phase/best.pt --split test
+
+Alongside the model's own score I measured two floors on the same frames: the same
+network with no training at all, and pure random guessing. A score only means
+something next to those, since 14 steps of wildly different lengths make it hard to
+guess by eye what counts as good.
+
+Writes `phase_metrics.json` and `phase_timeline.png` into `results/`.
 """
 
 from __future__ import annotations
@@ -11,9 +20,9 @@ import os
 
 import matplotlib
 
-matplotlib.use("Agg")  # no display in CI or over ssh
+matplotlib.use("Agg")  # draw straight to a file, since there may be no screen attached
 
-import matplotlib.pyplot as plt  # noqa: E402  (must follow the backend selection)
+import matplotlib.pyplot as plt  # noqa: E402  (has to come after the line above)
 import numpy as np  # noqa: E402
 from matplotlib.colors import BoundaryNorm  # noqa: E402
 
@@ -29,6 +38,13 @@ from src.phase.train import (build_dataset, build_loader, collect_videos,  # noq
 
 def render_timeline(videos: list[VideoPrediction], num_steps: int, out_path: str,
                     title: str) -> None:
+    """
+    Draw each video as two coloured strips, the true steps above the predicted ones.
+
+    Colour is the step, and time runs left to right. Reading the two strips against
+    each other shows what a single accuracy number cannot: whether the model is
+    roughly right but late, or flickering between steps frame by frame.
+    """
     fig, axes = plt.subplots(len(videos), 1, squeeze=False, layout="constrained",
                              figsize=(11.5, 2.1 * len(videos) + 1.6))
     cmap = plt.get_cmap("tab20", num_steps)
@@ -41,10 +57,10 @@ def render_timeline(videos: list[VideoPrediction], num_steps: int, out_path: str
                   cmap=cmap, norm=norm, extent=(0, len(true), 2, 0))
         ax.set_yticks([0.5, 1.5])
         ax.set_yticklabels(["ground truth", "prediction"], fontsize=10)
-        if i == len(videos) - 1:  # one shared x axis label; per-panel labels collide
+        if i == len(videos) - 1:  # label the bottom panel only, or the labels overlap
             ax.set_xlabel("frame index", fontsize=11)
         acc = float((pred == true).mean())
-        ax.set_title(f"{video.video_id} — {len(true)} frames, frame accuracy {acc:.3f}, "
+        ax.set_title(f"{video.video_id}: {len(true)} frames, frame accuracy {acc:.3f}, "
                      f"{int((np.diff(pred) != 0).sum())} predicted step changes "
                      f"({int((np.diff(true) != 0).sum())} in the ground truth)",
                      fontsize=10.5, loc="left")
@@ -60,7 +76,7 @@ def render_timeline(videos: list[VideoPrediction], num_steps: int, out_path: str
 
 
 def random_reference(videos: list[VideoPrediction], seed: int, **score_kwargs) -> PhaseScore:
-    """Score uniform-random logits on the same frames as a measured chance floor."""
+    """Score pure guessing on these same frames, to see what luck alone would give."""
     rng = np.random.default_rng(seed)
     fake = [VideoPrediction(
         video_id=v.video_id,
@@ -75,7 +91,7 @@ def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--checkpoint", required=True, help="best.pt from src.phase.train")
     ap.add_argument("--split", default="test", choices=["train", "val", "test"],
-                    help="test is the held-out split; val is what selected the checkpoint")
+                    help="test is the held-out one. val is what chose this checkpoint")
     ap.add_argument("--out", default="results")
     return ap.parse_args()
 
@@ -89,8 +105,8 @@ def main() -> None:
 
     splits = resolve_phase_splits(cfg)
     if args.split not in splits:
-        raise SystemExit(f"{cfg.data_root}: no {args.split!r} split; "
-                         f"available: {sorted(splits)}")
+        raise SystemExit(f"{cfg.data_root}: there is no {args.split!r} split. "
+                         f"I found {sorted(splits)}")
     ids = splits[args.split]
     dataset = build_dataset(cfg, ids, args.split)
     loader = build_loader(dataset, cfg, shuffle=False)
@@ -110,7 +126,7 @@ def main() -> None:
     os.makedirs(args.out, exist_ok=True)
     fig_path = os.path.join(args.out, "phase_timeline.png")
     render_timeline(videos, cfg.num_steps, fig_path,
-                    f"{model.backend} — [{args.split}] {list(ids)}, "
+                    f"{model.backend}, [{args.split}] {list(ids)}, "
                     f"{SPLIT_PROVENANCE[args.split]}")
 
     summary = {
@@ -136,9 +152,9 @@ def main() -> None:
     with open(metrics_path, "w") as f:
         json.dump(summary, f, indent=2)
 
-    print(f"{model.backend} | {score.describe()} — {SPLIT_PROVENANCE[args.split]}")
-    print(f"same architecture untrained on the same frames | {base.describe()}")
-    print(f"uniform-random logits on the same frames | {chance.describe()}")
+    print(f"{model.backend} | {score.describe()}. {SPLIT_PROVENANCE[args.split]}")
+    print(f"the same network with no training, same frames | {base.describe()}")
+    print(f"pure guessing, same frames | {chance.describe()}")
     print(f"wrote {metrics_path}, {fig_path}")
 
 

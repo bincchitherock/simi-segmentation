@@ -1,3 +1,17 @@
+"""
+Trains the phase model.
+
+    python -m src.phase.train --config configs/phase_phantom.yaml
+
+Each epoch runs through the training videos, then scores the val videos. I saved the
+model whenever that val score beat the best so far, so what ends up on disk is the best
+epoch rather than the last one.
+
+Val is used to choose, so its score is flattering and is not a fair estimate. If a test
+split exists, the saved model is scored on it once at the very end, and that is the
+number worth quoting.
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -22,12 +36,14 @@ from src.phase.model import PhaseModelConfig, SpatioTemporalMultiTask
 CHECKPOINT_FORMAT = "psai-phase"
 CHECKPOINT_VERSION = 1
 SELECTION_METRIC = "val step macro-F1"
-WARMUP_FRACTION = 0.05  # transformer only; post-norm encoders spike without it
+# The transformer needs its learning rate eased in over the first few percent of
+# training, or the loss spikes early on. The tcn does not, so it skips this.
+WARMUP_FRACTION = 0.05
 
 
 @dataclass(frozen=True)
 class PhaseTrainConfig(PhaseConfig):
-    """PhaseConfig plus the one knob the training loop owns."""
+    """Everything in `PhaseConfig`, plus the one setting only training cares about."""
 
     class_weighting: bool = True
 
@@ -49,7 +65,12 @@ def build_loader(ds: ClipDataset, cfg: PhaseTrainConfig, *, shuffle: bool) -> Da
 def class_weights(step_counts: torch.Tensor, instr_pos: torch.Tensor,
                   n_frames: int) -> tuple[tuple[float, ...], tuple[float, ...]]:
     """
-    Inverse-frequency step weights and per-instrument pos_weight.
+    Give rare steps and rare instruments more say in the loss.
+
+    Some steps fill most of a video and others appear briefly. Left alone, the model
+    does well by ignoring the rare ones. Weighting each by how uncommon it is stops
+    that. Anything absent from the training videos gets a weight of 1 and no special
+    treatment, since there is nothing to learn from.
     """
     num_steps = step_counts.numel()
     step_w = torch.where(step_counts > 0,
@@ -65,6 +86,7 @@ def class_weights(step_counts: torch.Tensor, instr_pos: torch.Tensor,
 @torch.no_grad()
 def collect_videos(model: SpatioTemporalMultiTask, loader: DataLoader,
                    device: torch.device) -> list[VideoPrediction]:
+    """Run the model over every clip and stitch the results back into whole videos."""
     model.eval()
     agg = LogitAggregator()
     for batch in loader:
@@ -81,16 +103,17 @@ def collect_videos(model: SpatioTemporalMultiTask, loader: DataLoader,
 
 def evaluate(model: SpatioTemporalMultiTask, loader: DataLoader, device: torch.device,
              cfg: PhaseTrainConfig, split: str) -> PhaseScore:
-    """Score every real frame of the split exactly once."""
+    """Score a split, counting every real frame exactly once."""
     return score_videos(collect_videos(model, loader, device), num_steps=cfg.num_steps,
                         num_instruments=cfg.num_instruments,
                         instrument_threshold=cfg.instrument_threshold, split=split)
 
 
-# Checkpoints
+# Saving and reloading a trained model.
 def save_checkpoint(path: str, model: SpatioTemporalMultiTask, model_cfg: PhaseModelConfig,
                     cfg: PhaseTrainConfig, splits: Mapping[str, Sequence[str]],
                     epoch: int, score: PhaseScore) -> None:
+    """Save the weights along with the settings and splits that produced them."""
     torch.save({"format": CHECKPOINT_FORMAT, "version": CHECKPOINT_VERSION,
                 "model": model.state_dict(),
                 "model_cfg": config_to_dict(model_cfg),
@@ -103,23 +126,24 @@ def save_checkpoint(path: str, model: SpatioTemporalMultiTask, model_cfg: PhaseM
 
 def load_checkpoint(path: str, map_location: str = "cpu"
                     ) -> tuple[SpatioTemporalMultiTask, PhaseTrainConfig, dict]:
-    """Rebuild the model a checkpoint holds; returns (model, cfg, payload)."""
+    """Rebuild a saved model. Returns the model, its settings, and the rest of the file."""
     payload = torch.load(path, map_location=map_location, weights_only=False)
     if payload.get("format") != CHECKPOINT_FORMAT or payload.get("version") != CHECKPOINT_VERSION:
         raise ValueError(f"{path}: not a {CHECKPOINT_FORMAT} v{CHECKPOINT_VERSION} checkpoint "
                          f"(got {payload.get('format')!r} v{payload.get('version')!r})")
     model_cfg = config_from_mapping(payload["model_cfg"], PhaseModelConfig, source=path)
     cfg = config_from_mapping(payload["cfg"], PhaseTrainConfig, source=path)
-    # the state dict overwrites any pretrained weights, so skip downloading them
+    # The saved weights replace everything anyway, so there is no point downloading
+    # the pretrained ones first.
     model = SpatioTemporalMultiTask(dataclasses.replace(model_cfg, pretrained=False))
     model.load_state_dict(payload["model"])
     return model, cfg, payload
 
 
-# Training
+# The training loop itself.
 def build_scheduler(opt: torch.optim.Optimizer, cfg: PhaseTrainConfig,
                     steps_per_epoch: int) -> torch.optim.lr_scheduler.LambdaLR:
-    """Cosine decay, with linear warmup for the transformer variant."""
+    """Ease the learning rate down to zero over the run, along a smooth curve."""
     total = max(1, cfg.epochs * steps_per_epoch)
     warmup = int(WARMUP_FRACTION * total) if cfg.temporal == "transformer" else 0
 
@@ -136,6 +160,7 @@ def train_one_epoch(model: SpatioTemporalMultiTask, loader: DataLoader,
                     opt: torch.optim.Optimizer,
                     sched: torch.optim.lr_scheduler.LambdaLR,
                     device: torch.device, cfg: PhaseTrainConfig, epoch: int) -> float:
+    """One pass over the training clips. Returns the average loss."""
     model.train()
     running = 0.0
     for i, batch in enumerate(loader):
@@ -144,8 +169,9 @@ def train_one_epoch(model: SpatioTemporalMultiTask, loader: DataLoader,
         loss, _ = model.compute_loss(out, batch["step"].to(device),
                                      batch["instrument"].to(device), valid)
         if not math.isfinite(loss.item()):
-            raise RuntimeError(f"epoch {epoch} batch {i}: loss is {loss.item()} -- "
-                               "aborting rather than silently training on NaN")
+            raise RuntimeError(f"epoch {epoch} batch {i}: the loss came out as "
+                               f"{loss.item()}. Stopping here, because carrying on would "
+                               "quietly wreck the weights")
         opt.zero_grad()
         loss.backward()
         if cfg.grad_clip > 0:
@@ -214,18 +240,18 @@ def main() -> None:
             best, best_epoch = score.step_macro_f1, epoch
             save_checkpoint(best_path, model, model_cfg, cfg, splits, epoch, score)
 
-    print(f"selected epoch {best_epoch} of {model.backend} by {SELECTION_METRIC} = "
-          f"{best:.3f} (this is a selection score on val, not a held-out estimate) "
-          f"-> {best_path}")
+    print(f"kept epoch {best_epoch} of {model.backend}, chosen by {SELECTION_METRIC} = "
+          f"{best:.3f}. That was the score I picked on, so it flatters the model. "
+          f"Saved to {best_path}")
 
     if test_ids:
         best_model, _, _ = load_checkpoint(best_path)
         test_loader = build_loader(build_dataset(cfg, test_ids, "test"), cfg, shuffle=False)
         score = evaluate(best_model.to(device), test_loader, device, cfg, "test")
-        print(f"{best_model.backend} | {score.describe()} — held out from both training "
-              "and checkpoint selection")
+        print(f"{best_model.backend} | {score.describe()}. These videos were kept out of "
+              "both the training and the choice of epoch")
     else:
-        print("no test split configured: no held-out estimate was computed")
+        print("no test split is set up, so nothing here is a held-out score")
 
 
 if __name__ == "__main__":

@@ -1,3 +1,16 @@
+"""
+The phase network: what step is happening, and which instruments are in view.
+
+It works in three parts. An image encoder turns each frame into a vector on its own.
+A temporal model then looks along the clip, so a frame is read in the light of what
+came before and after it. Two small heads read off the answers, one picking a single
+step and one flagging any number of instruments at once.
+
+The middle part comes in two flavours, set by `temporal` in the config. `tcn` slides
+filters along time and is the default. `transformer` lets every frame look at every
+other frame directly, which is more flexible and needs more data.
+"""
+
 from __future__ import annotations
 
 import math
@@ -12,12 +25,19 @@ from src.common.backbone import FrameEncoder
 
 
 def _dilations(n_layers: int, clip_len: int) -> list[int]:
+    """
+    How far apart each layer spaces the frames it looks at.
+
+    The gaps double layer by layer, 1, 2, 4, 8, so a stack of a few layers can see
+    across a long clip without needing a filter that wide. I capped the doubling at the
+    clip length, then started over from 1, since a gap wider than the clip sees nothing.
+    """
     max_exp = max(1, int(math.log2(max(2, clip_len // 2))) + 1)
     return [2 ** (i % max_exp) for i in range(n_layers)]
 
 
 class DilatedResidualLayer(nn.Module):
-    """MS-TCN residual block"""
+    """One layer. It adds to what came in rather than replacing it, which trains better."""
 
     def __init__(self, dilation: int, ch: int, dropout: float = 0.1) -> None:
         super().__init__()
@@ -32,7 +52,7 @@ class DilatedResidualLayer(nn.Module):
 
 
 class SingleStageTCN(nn.Module):
-    """Dilated residual TCN over (B, C, T) features."""
+    """A stack of those layers, each looking further along the clip than the last."""
 
     def __init__(self, in_ch: int, ch: int, n_layers: int = 8, dropout: float = 0.1,
                  clip_len: int = 64) -> None:
@@ -50,7 +70,7 @@ class SingleStageTCN(nn.Module):
 
 
 class TransformerTemporal(nn.Module):
-    """Transformer encoder over (B, C, T) features, with a padding mask."""
+    """The other option: every frame can look at every other frame in the clip."""
 
     def __init__(self, in_ch: int, ch: int, n_layers: int = 4, n_heads: int = 4,
                  dropout: float = 0.1, clip_len: int = 64) -> None:
@@ -65,8 +85,8 @@ class TransformerTemporal(nn.Module):
     def forward(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         t = x.shape[-1]
         if t > self.pos.shape[1]:
-            raise ValueError(f"clip length {t} exceeds the positional embedding "
-                             f"({self.pos.shape[1]}); rebuild the model with clip_len={t}")
+            raise ValueError(f"this clip is {t} frames long but the model was built for "
+                             f"{self.pos.shape[1]}. Rebuild it with clip_len={t}")
         valid = mask.squeeze(1) > 0
         h = self.in_proj(x.transpose(1, 2)) + self.pos[:, :t]
         h = self.encoder(h, src_key_padding_mask=~valid)
@@ -75,6 +95,14 @@ class TransformerTemporal(nn.Module):
 
 @dataclass(frozen=True)
 class PhaseModelConfig:
+    """
+    Only the settings the network itself needs.
+
+    You almost certainly want `PhaseConfig` in `src/common/config.py` instead. That is
+    the one the YAML files fill in and the one to edit. `from_config` below copies the
+    shared fields across from it when the model gets built.
+    """
+
     backbone: str = "timm:convnext_tiny"
     pretrained: bool = True
     freeze_backbone: bool = False
@@ -105,6 +133,7 @@ class PhaseModelConfig:
 
     @classmethod
     def from_config(cls, cfg: Any, **extra: Any) -> "PhaseModelConfig":
+        """Copy across every field this shares with `cfg`. `extra` wins over both."""
         shared = {f.name: getattr(cfg, f.name) for f in fields(cls) if hasattr(cfg, f.name)}
         return cls(**{**shared, **extra})
 
@@ -115,7 +144,11 @@ def _weight_tensor(values: tuple[float, ...]) -> Optional[torch.Tensor]:
 
 class SpatioTemporalMultiTask(nn.Module):
     """
-    Frame encoder -> temporal model -> (step, instrument) heads.
+    The whole thing: encode each frame, look along time, then read off both answers.
+
+    Two heads share one body. The step head picks exactly one of the steps, since only
+    one can be happening. The instrument head judges each instrument separately, since
+    several can be in view at the same time.
     """
 
     def __init__(self, cfg: PhaseModelConfig) -> None:
@@ -136,11 +169,13 @@ class SpatioTemporalMultiTask(nn.Module):
         self.step_head = nn.Conv1d(cfg.temporal_ch, cfg.num_steps, 1)
         self.instr_head = nn.Conv1d(cfg.temporal_ch, cfg.num_instruments, 1)
 
-        # buffers, not plain tensors, so .to(device) moves them with the model
+        # Registered rather than stored plainly, so moving the model to the GPU moves
+        # these along with it.
         self.register_buffer("step_weight", _weight_tensor(cfg.step_class_weight))
         self.register_buffer("instr_pos_weight", _weight_tensor(cfg.instrument_pos_weight))
 
     def _encode(self, clip: torch.Tensor, valid: torch.Tensor) -> torch.Tensor:
+        """Encode the real frames only. Short clips are padded, and padding is skipped."""
         if valid.all():
             return self.encoder(clip)
         flat = self.encoder(clip[valid])  # (n_valid, D)
@@ -163,6 +198,7 @@ class SpatioTemporalMultiTask(nn.Module):
     def compute_loss(self, out: dict[str, torch.Tensor], step_target: torch.Tensor,
                      instr_target: torch.Tensor,
                      valid: torch.Tensor) -> tuple[torch.Tensor, dict[str, float]]:
+        """Add up both heads' losses. Padded frames are left out of both."""
         if not valid.any():
             raise ValueError("batch contains no valid frames")
         step_logits = out["step"][valid]
